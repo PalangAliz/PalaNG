@@ -246,9 +246,14 @@ class XrayVpnService : VpnService() {
         val builder = Builder()
             .setSession(sessionName.ifBlank { "PalaNG" })
             .setMtu(1500)
-            .addAddress("10.0.0.2", 30)
-            .addDnsServer("8.8.8.8")
-            .addDnsServer("8.8.4.4")
+            .addAddress("26.26.26.1", 30)
+
+        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+            builder.addDnsServer("26.26.26.2")
+        } else {
+            builder.addDnsServer("8.8.8.8")
+            builder.addDnsServer("8.8.4.4")
+        }
 
         if (settings.preferIpv6) {
             builder.addAddress("fd00:10:0:0::2", 126)

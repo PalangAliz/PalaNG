@@ -539,28 +539,13 @@ object XrayConfigBuilder {
 
     private fun buildDns(settings: AppSettings, isAmir: Boolean = false): JSONObject {
         val servers = JSONArray()
-        if (settings.fakeDnsEnabled) {
-            servers.put("fakedns")
-        }
-        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://1.1.1.1/dns-query" }
-        // Amir's local SOCKS5 tunnel is TCP-only; preserve the user's TCP/DoH resolver (e.g. 1.1.1.1 or 8.8.8.8 DoH)
-        // and only rewrite plain UDP or QUIC schemes to HTTPS DoH over TCP.
-        val isTcpCapableScheme = configuredRemote.startsWith("https://", ignoreCase = true) ||
-            configuredRemote.startsWith("https+local://", ignoreCase = true) ||
-            configuredRemote.startsWith("tcp://", ignoreCase = true) ||
-            configuredRemote.startsWith("tcp+local://", ignoreCase = true)
-        val effectiveRemote = if (isAmir && !isTcpCapableScheme) {
-            "https://8.8.8.8/dns-query"
-        } else {
-            configuredRemote
-        }
-        servers.put(effectiveRemote)
         val domestic = if (isAmir) {
             // Avoid plain UDP to external domestic IP through TCP-only Amir; use local direct resolver for domestic rules only.
             "localhost"
         } else {
             settings.domesticDns.ifBlank { "223.5.5.5" }
         }
+        // Place domain-scoped domestic DNS before catch-all FakeDNS so bypassed domestic domains resolve to real IPs
         when (settings.routingMode) {
             RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
                 servers.put(
@@ -580,6 +565,30 @@ object XrayConfigBuilder {
             }
             else -> Unit
         }
+        if (settings.fakeDnsEnabled) {
+            servers.put("fakedns")
+        }
+        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://1.1.1.1/dns-query" }
+        val isTcpCapableScheme = configuredRemote.startsWith("https://", ignoreCase = true) ||
+            configuredRemote.startsWith("https+local://", ignoreCase = true) ||
+            configuredRemote.startsWith("tcp://", ignoreCase = true) ||
+            configuredRemote.startsWith("tcp+local://", ignoreCase = true)
+        val isCloudflareEndpoint = configuredRemote.contains("1.1.1.1") ||
+            configuredRemote.contains("1.0.0.1") ||
+            configuredRemote.contains("1.1.1.2") ||
+            configuredRemote.contains("1.0.0.2") ||
+            configuredRemote.contains("1.1.1.3") ||
+            configuredRemote.contains("1.0.0.3") ||
+            configuredRemote.contains("cloudflare-dns.com", ignoreCase = true) ||
+            configuredRemote.contains("one.one.one.one", ignoreCase = true)
+        // Cloudflare Workers' connect() blocks outbound sockets to Cloudflare's own 1.1.1.1/1.0.0.1 IPs,
+        // and Amir only tunnels TCP. Route fallback DNS queries (e.g. AAAA/HTTPS Type 65) via Google DoH.
+        val effectiveRemote = if (isAmir && (!isTcpCapableScheme || isCloudflareEndpoint)) {
+            "https://8.8.8.8/dns-query"
+        } else {
+            configuredRemote
+        }
+        servers.put(effectiveRemote)
         return JSONObject()
             .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
             .put("servers", servers)
@@ -600,6 +609,20 @@ object XrayConfigBuilder {
                     .put("inboundTag", JSONArray().put("tun").put("socks").put("http"))
                     .put("port", "53")
                     .put("outboundTag", "dns-out")
+            )
+        }
+
+        // Route FakeDNS synthetic IP pool directly to proxy outbound (matches v2rayNG)
+        if (settings.fakeDnsEnabled) {
+            val fakeIps = JSONArray().put("198.18.0.0/15")
+            if (settings.preferIpv6) {
+                fakeIps.put("fc00::/18")
+            }
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("ip", fakeIps)
+                    .put("outboundTag", "proxy")
             )
         }
 
