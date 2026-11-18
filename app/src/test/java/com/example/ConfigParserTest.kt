@@ -289,4 +289,124 @@ class ConfigParserTest {
             serverSock.close()
         }
     }
+
+    @Test
+    fun `buildFullConfig wires Core, Mux, Fragment, Observatory, DNS Hosts, and VPN MTU settings`() {
+        val vlessUri = "vless://11111111-1111-1111-1111-111111111111@vpn.example.com:443?encryption=none&security=tls&sni=vpn.example.com&type=tcp#EdgeNode"
+        val server = ConfigParser.parseSingleUri(vlessUri)!!
+
+        val settings = AppSettings(
+            vpnMode = true,
+            vpnMtu = 1400,
+            enableIpv6 = true,
+            preferIpv6 = true,
+            localDnsEnabled = true,
+            fakeDnsEnabled = true,
+            localProxyEnabled = true,
+            socks5UdpEnabled = false,
+            localProxyUsername = "admin",
+            localProxyPassword = "secret",
+            dnsHosts = "example.com:1.2.3.4,domain:test.org:9.9.9.9,v6.org:2001:db8::1,multi.com:1.1.1.1;1.0.0.1",
+            outboundDomainResolve = AppSettings.OUTBOUND_AS_IS,
+            muxEnabled = true,
+            muxConcurrency = -1,
+            muxXudpConcurrency = 16,
+            muxXudpProxyUdp443 = "skip",
+            fragmentEnabled = true,
+            fragmentPackets = "1-3",
+            fragmentLength = "50-100",
+            fragmentInterval = "10-20",
+            fragmentMaxSplit = "5-10",
+            observatoryMode = AppSettings.OBSERVATORY_LEAST_LOAD,
+            burstObservatoryInterval = "2m",
+            burstObservatoryHttpMethod = "GET",
+            burstObservatorySampling = 4,
+            burstObservatoryTimeout = "15s",
+            delayTestUrl = "https://cp.cloudflare.com/generate_204"
+        )
+
+        val jsonStr = XrayConfigBuilder.buildFullConfig(
+            server = server,
+            settings = settings,
+            customRules = emptyList(),
+            resolvedServerHosts = mapOf("vpn.example.com" to listOf("203.0.113.10")),
+            runtimeSocksPort = 41001,
+            runtimeHttpPort = 41002
+        )
+        val root = JSONObject(jsonStr)
+
+        val inbounds = root.getJSONArray("inbounds")
+        assertEquals(3, inbounds.length())
+        assertEquals(1400, inbounds.getJSONObject(0).getJSONObject("settings").getInt("MTU"))
+
+        val socksInbound = inbounds.getJSONObject(1)
+        assertEquals(41001, socksInbound.getInt("port"))
+        val socksSettings = socksInbound.getJSONObject("settings")
+        assertEquals("password", socksSettings.getString("auth"))
+        assertEquals(false, socksSettings.getBoolean("udp"))
+        assertEquals("admin", socksSettings.getJSONArray("accounts").getJSONObject(0).getString("user"))
+        assertEquals("secret", socksSettings.getJSONArray("accounts").getJSONObject(0).getString("pass"))
+
+        val httpInbound = inbounds.getJSONObject(2)
+        assertEquals(41002, httpInbound.getInt("port"))
+        assertEquals("admin", httpInbound.getJSONObject("settings").getJSONArray("accounts").getJSONObject(0).getString("user"))
+
+        val dns = root.getJSONObject("dns")
+        assertEquals("UseIP", dns.getString("queryStrategy"))
+        val hosts = dns.getJSONObject("hosts")
+        assertEquals("203.0.113.10", hosts.getString("vpn.example.com"))
+        assertEquals("1.2.3.4", hosts.getString("example.com"))
+        assertEquals("9.9.9.9", hosts.getString("domain:test.org"))
+        assertEquals("2001:db8::1", hosts.getString("v6.org"))
+        assertEquals("1.1.1.1", hosts.getJSONArray("multi.com").getString(0))
+        assertEquals("1.0.0.1", hosts.getJSONArray("multi.com").getString(1))
+
+        val outbounds = root.getJSONArray("outbounds")
+        val proxyMux = outbounds.getJSONObject(0).getJSONObject("mux")
+        assertTrue(proxyMux.getBoolean("enabled"))
+        assertEquals(-1, proxyMux.getInt("concurrency"))
+        assertEquals(16, proxyMux.getInt("xudpConcurrency"))
+        assertEquals("skip", proxyMux.getString("xudpProxyUDP443"))
+
+        val fragmentObj = outbounds.getJSONObject(1).getJSONObject("settings").getJSONObject("fragment")
+        assertEquals("1-3", fragmentObj.getString("packets"))
+        assertEquals("50-100", fragmentObj.getString("length"))
+        assertEquals("5-10", fragmentObj.getString("maxSplit"))
+
+        val directOutbound = outbounds.getJSONObject(2)
+        assertEquals("AsIs", directOutbound.getJSONObject("settings").getString("domainStrategy"))
+
+        assertTrue(root.has("burstObservatory"))
+        assertEquals(false, root.has("observatory"))
+        val pingConfig = root.getJSONObject("burstObservatory").getJSONObject("pingConfig")
+        assertEquals("GET", pingConfig.getString("httpMethod"))
+        assertEquals("2m", pingConfig.getString("interval"))
+        assertEquals(4, pingConfig.getInt("sampling"))
+        assertEquals("15s", pingConfig.getString("timeout"))
+        assertEquals("https://cp.cloudflare.com/generate_204", pingConfig.getString("destination"))
+
+        val fakeDns = root.getJSONArray("fakedns")
+        assertEquals(2, fakeDns.length())
+        assertEquals("fc00::/18", fakeDns.getJSONObject(1).getString("ipPool"))
+    }
+
+    @Test
+    fun `buildFullConfig omits local proxy inbounds when disabled in VPN mode and supports leastPing observatory`() {
+        val vlessUri = "vless://11111111-1111-1111-1111-111111111111@vpn.example.com:443?encryption=none&security=tls&type=tcp#Node"
+        val server = ConfigParser.parseSingleUri(vlessUri)!!
+
+        val settings = AppSettings(
+            vpnMode = true,
+            localProxyEnabled = false,
+            observatoryMode = AppSettings.OBSERVATORY_LEAST_PING,
+            observatoryInterval = "4m"
+        )
+        val root = JSONObject(XrayConfigBuilder.buildFullConfig(server, settings, emptyList()))
+        val inbounds = root.getJSONArray("inbounds")
+        assertEquals(1, inbounds.length())
+        assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
+        assertTrue(root.has("observatory"))
+        assertEquals(false, root.has("burstObservatory"))
+        assertEquals("4m", root.getJSONObject("observatory").getString("probeInterval"))
+    }
 }

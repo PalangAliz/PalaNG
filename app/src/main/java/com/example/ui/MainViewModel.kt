@@ -17,6 +17,7 @@ import com.example.data.model.ProtocolType
 import com.example.data.model.RoutingRule
 import com.example.data.model.ServerConfig
 import com.example.data.model.SubscriptionGroup
+import com.example.service.ActiveRuntimeProxy
 import com.example.service.ConnectionState
 import com.example.service.VpnStateHolder
 import com.example.service.XrayVpnService
@@ -35,7 +36,25 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
+import okhttp3.Credentials
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.util.concurrent.TimeUnit
+
+sealed interface ConnectionInfoState {
+    data object Idle : ConnectionInfoState
+    data object Loading : ConnectionInfoState
+    data class Success(
+        val url: String,
+        val elapsedMs: Long,
+        val summaryLines: List<Pair<String, String>>,
+        val rawBody: String
+    ) : ConnectionInfoState
+    data class Error(val message: String) : ConnectionInfoState
+}
 
 data class HomeUiState(
     val servers: List<ServerConfig> = emptyList(),
@@ -61,6 +80,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isUpdatingSubs = MutableStateFlow(false)
     private val _assetInfos = MutableStateFlow<List<GeoAssetInfo>>(emptyList())
     private val _updatingAssetName = MutableStateFlow<String?>(null)
+    private val _connectionInfoState = MutableStateFlow<ConnectionInfoState>(ConnectionInfoState.Idle)
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
@@ -76,9 +96,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val assetInfos: StateFlow<List<GeoAssetInfo>> = _assetInfos.asStateFlow()
     val updatingAssetName: StateFlow<String?> = _updatingAssetName.asStateFlow()
+    val connectionInfoState: StateFlow<ConnectionInfoState> = _connectionInfoState.asStateFlow()
 
     val connectionState = VpnStateHolder.connectionState
     val trafficStats = VpnStateHolder.trafficStats
+    val activeProxy: StateFlow<ActiveRuntimeProxy> = VpnStateHolder.activeProxy
     val lastTestedDelayMs = VpnStateHolder.lastTestedDelayMs
     val isTestingActiveDelay = VpnStateHolder.isTestingDelay
     val logs = VpnStateHolder.logs
@@ -193,6 +215,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val url = repository.getSettingsSnapshot().delayTestUrl
             XrayVpnService.measureDelay(app, url)
         }
+    }
+
+    fun clearConnectionInfo() {
+        _connectionInfoState.value = ConnectionInfoState.Idle
+    }
+
+    fun testCurrentConnectionInfo() {
+        if (VpnStateHolder.connectionState.value != ConnectionState.CONNECTED) {
+            _snackbarEvents.tryEmit("Connect to a server first")
+            return
+        }
+        val proxy = VpnStateHolder.activeProxy.value
+        if (!proxy.enabled) {
+            _connectionInfoState.value = ConnectionInfoState.Error(
+                "Local proxy is disabled in Core Settings. Enable Local Proxy to run connection info queries through Xray."
+            )
+            return
+        }
+        _connectionInfoState.value = ConnectionInfoState.Loading
+        viewModelScope.launch(Dispatchers.IO) {
+            val settings = repository.getSettingsSnapshot()
+            val url = settings.connInfoTestUrl.trim().ifBlank { "https://api.ip.sb/geoip" }
+            val startMs = System.currentTimeMillis()
+            runCatching {
+                val builder = OkHttpClient.Builder()
+                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxy.httpPort)))
+                    .connectTimeout(12, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .followRedirects(true)
+                if (proxy.username.isNotBlank() || proxy.password.isNotBlank()) {
+                    val credential = Credentials.basic(proxy.username, proxy.password)
+                    builder.proxyAuthenticator { _, response ->
+                        response.request.newBuilder()
+                            .header("Proxy-Authorization", credential)
+                            .build()
+                    }
+                }
+                val client = builder.build()
+                val req = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "PalaNG/1.0")
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty().trim()
+                    if (!resp.isSuccessful) {
+                        error("HTTP ${resp.code}: ${resp.message}")
+                    }
+                    val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                    val summary = parseConnectionInfoBody(body)
+                    _connectionInfoState.value = ConnectionInfoState.Success(
+                        url = url,
+                        elapsedMs = elapsed,
+                        summaryLines = summary,
+                        rawBody = body
+                    )
+                }
+            }.onFailure { err ->
+                _connectionInfoState.value = ConnectionInfoState.Error(
+                    err.message ?: "Failed to query connection info"
+                )
+            }
+        }
+    }
+
+    private fun parseConnectionInfoBody(body: String): List<Pair<String, String>> {
+        val obj = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+        val pairs = mutableListOf<Pair<String, String>>()
+        val candidateKeys = listOf(
+            "ip" to "IP",
+            "country" to "Country",
+            "country_code" to "Code",
+            "region" to "Region",
+            "city" to "City",
+            "isp" to "ISP",
+            "organization" to "Organization",
+            "org" to "Org",
+            "asn" to "ASN",
+            "asn_organization" to "ASN Org",
+            "timezone" to "Timezone"
+        )
+        candidateKeys.forEach { (key, label) ->
+            val v = obj.optString(key, "").trim()
+            if (v.isNotEmpty() && v != "null") {
+                pairs += label to v
+            }
+        }
+        return pairs
     }
 
     fun importFromClipboard() {
@@ -319,7 +428,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isTestingBatch.value = true
             _batchProgress.value = 0 to targets.size
             val settings = repository.getSettingsSnapshot()
-            val semaphore = Semaphore(4)
+            val concurrency = settings.concurrentDelayTests.coerceIn(1, 64)
+            val semaphore = Semaphore(concurrency)
             var done = 0
             try {
                 targets.map { server ->

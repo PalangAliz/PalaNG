@@ -34,9 +34,18 @@
     <string name="action_manual_wg">افزودن دستی [WireGuard]</string>
     <string name="action_manual_hy2">افزودن دستی [Hysteria2]</string>
     <string name="action_manual_amir">افزودن دستی [Amir]</string>
+    <string name="action_save">ذخیره</string>
+    <string name="action_cancel">لغو</string>
+    <string name="action_close">بستن</string>
+    <string name="action_delete">حذف</string>
+    <string name="action_retest">تست مجدد</string>
+
+    <string name="confirm_delete_title">حذف کانفیگ؟</string>
+    <string name="confirm_delete_message">آیا «%1$s» از فهرست پروفایل‌ها حذف شود؟</string>
 
     <string name="menu_real_delay_all">تست پینگ واقعی همه</string>
     <string name="menu_stop_delay_test">توقف تست پینگ</string>
+    <string name="menu_connection_info">اطلاعات اتصال فعلی</string>
     <string name="menu_sort_delay">مرتب‌سازی بر اساس پینگ</string>
     <string name="menu_remove_duplicates">حذف کانفیگ‌های تکراری</string>
     <string name="menu_remove_invalid">حذف کانفیگ‌های نامعتبر</string>
@@ -54,17 +63,121 @@
     <string name="search_hint">جستجو بر اساس نام، آدرس یا پروتکل</string>
 
     <string name="settings_title">تنظیمات</string>
-    <string name="settings_section_core">هسته و حالت VPN</string>
-    <string name="settings_section_dns">تشخیص ترافیک و DNS</string>
-    <string name="settings_section_mux">Mux و Fragment</string>
-    <string name="settings_section_general">ظاهر و زبان</string>
+    <string name="settings_section_ui">تنظیمات رابط کاربری</string>
+    <string name="settings_section_vpn">تنظیمات VPN</string>
+    <string name="settings_section_core">تنظیمات هسته (Core)</string>
+    <string name="settings_section_mux">تنظیمات Mux</string>
+    <string name="settings_section_fragment">تنظیمات Fragment</string>
+    <string name="settings_section_observatory">تنظیمات Observatory</string>
+    <string name="settings_section_advanced">تنظیمات پیشرفته</string>
+    <string name="settings_section_mode">تنظیمات حالت اجرا</string>
     <string name="settings_theme">تم برنامه</string>
     <string name="settings_language">زبان برنامه</string>
     <string name="theme_light">روشن (سفید)</string>
     <string name="theme_dark">تاریک</string>
     <string name="theme_system">مطابق سیستم</string>
-    <string name="lang_system">مطابق سیستم</string>
+    <string name="lang_system">خودکار (سیستم)</string>
     <string name="lang_en">English</string>
     <string name="lang_fa">فارسی</string>
+
+    <!-- UI settings -->
+    <string name="pref_speed_display_title">نمایش سرعت لحظه‌ای</string>
+    <string name="pref_speed_display_sub">نمایش سرعت آپلود و دانلود در اعلان و نوار وضعیت پایین صفحه</string>
+    <string name="pref_confirm_delete_title">تایید قبل از حذف کانفیگ</string>
+    <string name="pref_confirm_delete_sub">دریافت تایید دوباره از کاربر هنگام حذف یک پروفایل</string>
+    <string name="pref_two_column_title">چیدمان دو ستونه</string>
+    <string name="pref_two_column_sub">نمایش فهرست پروفایل‌ها در دو ستون برای مشاهده موارد بیشتر در صفحه</string>
+    <string name="pref_show_all_tab_title">نمایش تب گروه «همه»</string>
+    <string name="pref_show_all_tab_sub">ترکیب پروفایل‌های تمام اشتراک‌ها در یک تب واحد</string>
+    <string name="pref_dynamic_color_title">رنگ پویا (Dynamic Color)</string>
+    <string name="pref_dynamic_color_sub">فقط در دستگاه‌های اندروید ۱۲ و بالاتر کار می‌کند</string>
+
+    <!-- VPN settings -->
+    <string name="pref_enable_ipv6_title">فعال‌سازی IPv6</string>
+    <string name="pref_enable_ipv6_sub">افزودن آدرس و مسیر IPv6 به رابط شبکه VPN</string>
+    <string name="pref_prefer_ipv6_title">اولویت با IPv6</string>
+    <string name="pref_prefer_ipv6_sub">ترجیح آدرس‌های IPv6 هنگام ترجمه نام دامنه</string>
+    <string name="pref_local_dns_title">فعال‌سازی Local DNS</string>
+    <string name="pref_local_dns_sub">پردازش DNS توسط ماژول داخلی هسته (پیشنهادی برای دور زدن LAN و آدرس‌های داخلی)</string>
+    <string name="pref_fake_dns_title">فعال‌سازی FakeDNS</string>
+    <string name="pref_fake_dns_sub">بازگرداندن IP مجازی برای درخواست‌های دامنه (سریع‌تر است اما ممکن است با برخی برنامه‌ها سازگار نباشد)</string>
+    <string name="pref_forced_amir_dns">هنگام فعال بودن پروتکل Amir اجباراً روشن است (بعداً بازگردانده می‌شود)</string>
+    <string name="pref_vpn_dns_title">DNS شبکه VPN (فقط IPv4/IPv6)</string>
+    <string name="pref_vpn_dns_disabled_note">توسط Local DNS / FakeDNS مدیریت می‌شود</string>
+    <string name="pref_append_http_proxy_title">افزودن پراکسی HTTP به VPN</string>
+    <string name="pref_append_http_proxy_sub">امکان استفاده مستقیم مرورگرها و برنامه‌ها از پراکسی HTTP به جای رابط TUN (اندروید ۱۰+)</string>
+    <string name="pref_bypass_lan_title">دور زدن LAN در حالت VPN</string>
+    <string name="pref_bypass_lan_yes">دور زدن (Bypass)</string>
+    <string name="pref_bypass_lan_no">دور نزدن</string>
+    <string name="pref_vpn_interface_addr_title">آدرس رابط VPN</string>
+    <string name="pref_vpn_mtu_title">مقدار MTU شبکه VPN (پیش‌فرض 1500)</string>
+
+    <!-- Core settings -->
+    <string name="pref_sniffing_title">فعال‌سازی Sniffing</string>
+    <string name="pref_sniffing_sub">تشخیص دامنه مقصد از روی ترافیک عبوری (به‌صورت پیش‌فرض روشن)</string>
+    <string name="pref_route_only_title">فعال‌سازی routeOnly</string>
+    <string name="pref_route_only_sub">استفاده از دامنه تشخیص‌داده‌شده فقط برای مسیریابی بدون تغییر آدرس IP مقصد</string>
+    <string name="pref_local_proxy_title">فعال‌سازی پراکسی محلی</string>
+    <string name="pref_local_proxy_sub">در صورت غیرفعال بودن، پورت SOCKS/HTTP باز نمی‌شود و تست اطلاعات اتصال از طریق پراکسی ممکن نخواهد بود.</string>
+    <string name="pref_allow_lan_title">اجازه اتصال از شبکه محلی (LAN)</string>
+    <string name="pref_allow_lan_sub">سایر دستگاه‌های هم‌شبکه می‌توانند به آدرس IP شما متصل شوند؛ فقط در شبکه‌های مطمئن فعال کنید.</string>
+    <string name="pref_dynamic_port_title">پورت پویا برای پراکسی محلی</string>
+    <string name="pref_dynamic_port_sub">انتخاب پورت تصادفی و آزاد برای هر ورودی محلی در هر اتصال</string>
+    <string name="pref_local_socks_port_title">پورت پراکسی محلی (SOCKS5)</string>
+    <string name="pref_local_http_port_title">پورت پراکسی HTTP محلی</string>
+    <string name="pref_proxy_user_title">نام کاربری پراکسی محلی (اختیاری)</string>
+    <string name="pref_proxy_pass_title">رمز عبور پراکسی محلی (اختیاری)</string>
+    <string name="pref_socks5_udp_title">پشتیبانی UDP در SOCKS5</string>
+    <string name="pref_socks5_udp_sub">احراز هویت SOCKS5 هنگام استفاده از UDP امنیت کامل ندارد.</string>
+    <string name="pref_remote_dns_title">DNS راه دور (UDP/TCP/HTTPS/QUIC، اختیاری)</string>
+    <string name="pref_direct_dns_title">DNS مستقیم (اختیاری)</string>
+    <string name="pref_dns_hosts_title">نگاشت میزبان‌های DNS (فرمت: domain:address,…)</string>
+    <string name="pref_log_level_title">سطح ثبت گزارش (Log Level)</string>
+    <string name="pref_outbound_resolve_title">ترجمه دامنه خروجی (Outbound)</string>
+    <string name="outbound_resolve_and_add">ترجمه و افزودن به DNS Hosts</string>
+
+    <!-- Mux settings -->
+    <string name="pref_mux_title">فعال‌سازی Mux</string>
+    <string name="pref_mux_sub">سرعت بیشتر، اما ممکن است باعث ناپایداری شود؛ تنظیمات TCP، UDP و QUIC را در زیر شخصی‌سازی کنید.</string>
+    <string name="pref_mux_tcp_title">اتصالات TCP (بازه ‎-1 تا 1024)</string>
+    <string name="pref_mux_xudp_title">اتصالات XUDP (بازه ‎-1 تا 1024)</string>
+    <string name="pref_mux_quic_title">نحوه مدیریت QUIC در تونل Mux</string>
+
+    <!-- Fragment settings -->
+    <string name="pref_fragment_title">فعال‌سازی Fragment</string>
+    <string name="pref_fragment_sub">تکه‌تکه کردن بسته‌های TLS ClientHello از طریق dialerProxy</string>
+    <string name="pref_fragment_packets_title">بسته‌های Fragment</string>
+    <string name="pref_fragment_length_title">طول Fragment (min-max)</string>
+    <string name="pref_fragment_interval_title">فاصله زمانی Fragment (min-max)</string>
+    <string name="pref_fragment_max_split_title">حداکثر تقسیم (Fragment Max Split)</string>
+
+    <!-- Observatory settings -->
+    <string name="pref_observatory_mode_title">حالت پایش Observatory</string>
+    <string name="observatory_none">فقط برای بالانسر / JSON سفارشی</string>
+    <string name="observatory_least_ping">leastPing (observatory)</string>
+    <string name="observatory_least_load">leastLoad (burstObservatory)</string>
+    <string name="pref_least_ping_interval_title">بازه leastPing</string>
+    <string name="pref_least_load_interval_title">بازه leastLoad</string>
+    <string name="pref_least_load_method_title">متد HTTP در leastLoad</string>
+    <string name="pref_least_load_sampling_title">تعداد نمونه‌گیری leastLoad</string>
+    <string name="pref_least_load_timeout_title">مهلت زمانی leastLoad</string>
+
+    <!-- Advanced settings -->
+    <string name="pref_auto_boot_title">اتصال خودکار پس از روشن شدن دستگاه</string>
+    <string name="pref_auto_boot_sub">اتصال خودکار به سرور انتخاب‌شده پس از راه‌اندازی دستگاه (اندروید ممکن است اجرای پس‌زمینه را محدود کند).</string>
+    <string name="pref_system_vpn_title">تنظیمات VPN سیستم</string>
+    <string name="pref_system_vpn_sub">باز کردن تنظیمات VPN اندروید برای پیکربندی Always-on VPN در صورت پشتیبانی دستگاه</string>
+    <string name="pref_delay_url_title">نشانی تست پینگ واقعی</string>
+    <string name="pref_concurrent_delay_title">تعداد تست هم‌زمان پینگ واقعی</string>
+    <string name="pref_conn_info_url_title">نشانی تست اطلاعات اتصال فعلی</string>
+
+    <!-- Mode settings -->
+    <string name="pref_mode_title">حالت اجرا</string>
+    <string name="mode_vpn">VPN</string>
+    <string name="mode_proxy_only">فقط پراکسی (Proxy only)</string>
+    <string name="pref_more_help_title">راهنمای بیشتر</string>
+    <string name="pref_more_help_sub">توضیحات درباره Local DNS، FakeDNS، Fragment، Mux و هسته Amir</string>
+    <string name="help_dialog_body">• حالت VPN از رابط بومی Go TUN درون هسته Xray استفاده می‌کند.\n\n• برای مسیریابی سریع DNS و پروتکل Amir، فعال بودن Local DNS و FakeDNS ضروری است.\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور را پیش از بالا آمدن تونل ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، Mux، Fragment و Observatory در اتصال بعدی اعمال می‌شوند.</string>
+
     <string name="about_title">درباره برنامه</string>
 </resources>

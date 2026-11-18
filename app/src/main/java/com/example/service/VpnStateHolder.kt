@@ -23,6 +23,14 @@ data class TrafficStats(
     val connectedSinceMs: Long = 0L
 )
 
+data class ActiveRuntimeProxy(
+    val enabled: Boolean = false,
+    val socksPort: Int = 10808,
+    val httpPort: Int = 10809,
+    val username: String = "",
+    val password: String = ""
+)
+
 data class LogEntry(
     val timestamp: String,
     val message: String
@@ -43,6 +51,9 @@ object VpnStateHolder {
     private val _trafficStats = MutableStateFlow(TrafficStats())
     val trafficStats: StateFlow<TrafficStats> = _trafficStats.asStateFlow()
 
+    private val _activeProxy = MutableStateFlow(ActiveRuntimeProxy())
+    val activeProxy: StateFlow<ActiveRuntimeProxy> = _activeProxy.asStateFlow()
+
     private val _lastTestedDelayMs = MutableStateFlow<Long?>(null)
     val lastTestedDelayMs: StateFlow<Long?> = _lastTestedDelayMs.asStateFlow()
 
@@ -61,11 +72,16 @@ object VpnStateHolder {
         _activeServerRemarks.value = remarks
         if (state == ConnectionState.DISCONNECTED) {
             _trafficStats.value = TrafficStats()
+            _activeProxy.value = ActiveRuntimeProxy()
             _lastTestedDelayMs.value = null
             _isTestingDelay.value = false
         } else if (state == ConnectionState.CONNECTED && _trafficStats.value.connectedSinceMs == 0L) {
             _trafficStats.update { it.copy(connectedSinceMs = System.currentTimeMillis()) }
         }
+    }
+
+    fun setActiveProxy(proxy: ActiveRuntimeProxy) {
+        _activeProxy.value = proxy
     }
 
     fun updateTraffic(uplinkDelta: Long, downlinkDelta: Long) {

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.IpPrefix
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -21,6 +22,7 @@ import com.example.core.AssetHelper
 import com.example.core.XrayConfigBuilder
 import com.example.data.model.AppSettings
 import com.example.data.model.ProtocolType
+import com.example.data.model.ServerConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,8 +36,11 @@ import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
 import libv2ray.ProcessFinder
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 
 class XrayVpnService : VpnService() {
 
@@ -129,15 +134,49 @@ class XrayVpnService : VpnService() {
                     0
                 }
 
-                val configJson = XrayConfigBuilder.buildFullConfig(server, settings, rules, amirPort)
+                // Allocate ephemeral ports when Dynamic Local Proxy Port is enabled
+                val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
+                val runtimeSocksPort: Int
+                val runtimeHttpPort: Int
+                if (effectiveLocalProxy && settings.dynamicProxyPortEnabled) {
+                    runtimeSocksPort = allocateFreePort(fallback = settings.socksPort)
+                    runtimeHttpPort = allocateFreePort(fallback = settings.httpPort, excludePort = runtimeSocksPort)
+                    VpnStateHolder.appendLog("Dynamic local proxy ports allocated: SOCKS=$runtimeSocksPort, HTTP=$runtimeHttpPort")
+                } else {
+                    runtimeSocksPort = settings.socksPort
+                    runtimeHttpPort = settings.httpPort
+                }
+
+                VpnStateHolder.setActiveProxy(
+                    ActiveRuntimeProxy(
+                        enabled = effectiveLocalProxy,
+                        socksPort = runtimeSocksPort,
+                        httpPort = runtimeHttpPort,
+                        username = settings.localProxyUsername,
+                        password = settings.localProxyPassword
+                    )
+                )
+
+                // Resolve outbound server domain before VPN interface starts when "Resolve and add to DNS Hosts" is active
+                val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
+
+                val configJson = XrayConfigBuilder.buildFullConfig(
+                    server = server,
+                    settings = settings,
+                    customRules = rules,
+                    amirLocalPort = amirPort,
+                    resolvedServerHosts = resolvedHosts,
+                    runtimeSocksPort = runtimeSocksPort,
+                    runtimeHttpPort = runtimeHttpPort
+                )
 
                 val tunFd = if (settings.vpnMode) {
-                    val pfd = buildTunInterface(server.remarks, settings)
+                    val pfd = buildTunInterface(server.remarks, settings, runtimeHttpPort)
                         ?: error("Failed to establish VPN interface (check VPN permission)")
                     tunInterface = pfd
                     pfd.fd
                 } else {
-                    VpnStateHolder.appendLog("Running in Proxy-Only mode (SOCKS:${settings.socksPort}, HTTP:${settings.httpPort})")
+                    VpnStateHolder.appendLog("Running in Proxy-Only mode (SOCKS:$runtimeSocksPort, HTTP:$runtimeHttpPort)")
                     0
                 }
 
@@ -167,7 +206,7 @@ class XrayVpnService : VpnService() {
 
                 VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
                 updateNotification("Connected: ${server.remarks}")
-                startTrafficMonitor()
+                startTrafficMonitor(settings.speedDisplayEnabled)
             }.onFailure { err ->
                 VpnStateHolder.appendLog("Start error: ${err.message}")
                 VpnStateHolder.setError(err.message ?: "Failed to start Xray core")
@@ -176,6 +215,63 @@ class XrayVpnService : VpnService() {
                 stopSelf()
             }
         }
+    }
+
+    private fun allocateFreePort(fallback: Int, excludePort: Int = -1): Int {
+        repeat(4) {
+            runCatching {
+                ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { sock ->
+                    val port = sock.localPort
+                    if (port in 1024..65535 && port != excludePort) {
+                        return port
+                    }
+                }
+            }
+        }
+        return if (fallback != excludePort) fallback else (fallback + 1).coerceAtMost(65535)
+    }
+
+    private fun resolveServerAddressForDnsHosts(
+        server: ServerConfig,
+        settings: AppSettings
+    ): Map<String, List<String>> {
+        if (settings.outboundDomainResolve != AppSettings.OUTBOUND_RESOLVE_AND_ADD) {
+            return emptyMap()
+        }
+        val host = server.address.trim()
+        if (host.isEmpty() || server.protocol == ProtocolType.AMIR || server.protocol == ProtocolType.CUSTOM) {
+            return emptyMap()
+        }
+        // Skip literal IPv4 / IPv6 addresses
+        if (isIpLiteral(host)) return emptyMap()
+
+        return runCatching {
+            val allAddrs = InetAddress.getAllByName(host).toList()
+            val filtered = when {
+                settings.preferIpv6 -> {
+                    val v6 = allAddrs.filterIsInstance<Inet6Address>().mapNotNull { it.hostAddress }
+                    val v4 = allAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
+                    v6 + v4
+                }
+                else -> {
+                    allAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
+                        .ifEmpty { allAddrs.mapNotNull { it.hostAddress } }
+                }
+            }
+            if (filtered.isNotEmpty()) {
+                VpnStateHolder.appendLog("Resolved outbound host $host -> ${filtered.first()}")
+                mapOf(host to filtered.distinct())
+            } else {
+                emptyMap()
+            }
+        }.getOrElse { emptyMap() }
+    }
+
+    private fun isIpLiteral(value: String): Boolean {
+        val clean = value.removePrefix("[").removeSuffix("]")
+        val ipv4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+        if (ipv4.matches(clean)) return true
+        return clean.contains(':') && !clean.contains('/')
     }
 
     private suspend fun applyDnsPolicyForServer(
@@ -242,26 +338,40 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun buildTunInterface(sessionName: String, settings: AppSettings): ParcelFileDescriptor? {
+    private fun buildTunInterface(
+        sessionName: String,
+        settings: AppSettings,
+        effectiveHttpPort: Int
+    ): ParcelFileDescriptor? {
+        val preset = AppSettings.resolveVpnInterfacePreset(settings.vpnInterfaceAddress)
+        val mtu = settings.vpnMtu.coerceIn(1280, 9000)
+
         val builder = Builder()
             .setSession(sessionName.ifBlank { "PalaNG" })
-            .setMtu(1500)
-            .addAddress("26.26.26.1", 30)
+            .setMtu(mtu)
+            .addAddress(preset.clientIp, preset.prefixLength)
 
+        val parsedVpnDns = parseVpnDnsServers(settings.vpnDns, settings.enableIpv6)
         if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
-            builder.addDnsServer("26.26.26.2")
+            builder.addDnsServer(preset.routerDnsIp)
+        } else if (parsedVpnDns.isNotEmpty()) {
+            parsedVpnDns.forEach { dns ->
+                runCatching { builder.addDnsServer(dns) }
+            }
         } else {
+            builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("8.8.8.8")
-            builder.addDnsServer("8.8.4.4")
         }
 
-        if (settings.preferIpv6) {
+        if (settings.enableIpv6) {
             builder.addAddress("fd00:10:0:0::2", 126)
-            builder.addDnsServer("2606:4700:4700::1111")
+            if (settings.localDnsEnabled || settings.fakeDnsEnabled || parsedVpnDns.none { it.contains(':') }) {
+                builder.addDnsServer("2606:4700:4700::1111")
+            }
         }
 
         builder.addRoute("0.0.0.0", 0)
-        if (settings.preferIpv6) {
+        if (settings.enableIpv6) {
             builder.addRoute("::", 0)
         }
 
@@ -276,6 +386,12 @@ class XrayVpnService : VpnService() {
             ).forEach { (ip, prefix) ->
                 runCatching {
                     builder.excludeRoute(IpPrefix(InetAddress.getByName(ip), prefix))
+                }
+            }
+            // Ensure private TUN DNS gateway IP (e.g. 10.10.14.2 / 172.16.0.2) still routes into the TUN
+            if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+                runCatching {
+                    builder.addRoute(preset.routerDnsIp, 32)
                 }
             }
         }
@@ -301,9 +417,27 @@ class XrayVpnService : VpnService() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
+            if (settings.appendHttpProxyToVpn && settings.effectiveLocalProxyEnabled()) {
+                runCatching {
+                    builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", effectiveHttpPort))
+                }
+            }
         }
 
         return builder.establish()
+    }
+
+    private fun parseVpnDnsServers(raw: String, includeIpv6: Boolean): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(',', ' ', '\n')
+            .map { it.trim() }
+            .filter { token ->
+                if (token.isEmpty()) return@filter false
+                val isV6 = token.contains(':')
+                if (isV6 && !includeIpv6) return@filter false
+                isIpLiteral(token)
+            }
+            .distinct()
     }
 
     private fun registerAndroidProcessFinder(controller: CoreController) {
@@ -331,7 +465,7 @@ class XrayVpnService : VpnService() {
         })
     }
 
-    private fun startTrafficMonitor() {
+    private fun startTrafficMonitor(speedDisplayEnabled: Boolean) {
         trafficJob?.cancel()
         trafficJob = serviceScope.launch {
             while (isActive && VpnStateHolder.connectionState.value == ConnectionState.CONNECTED) {
@@ -340,21 +474,28 @@ class XrayVpnService : VpnService() {
                 val rawStats = runCatching { controller.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
                 var uplink = 0L
                 var downlink = 0L
+                var directTotal = 0L
                 if (rawStats.isNotBlank()) {
                     rawStats.split(";").forEach { item ->
                         val parts = item.split(",")
-                        if (parts.size == 3 && parts[0] == "proxy") {
+                        if (parts.size == 3) {
                             val value = parts[2].toLongOrNull() ?: 0L
-                            when (parts[1]) {
-                                "uplink" -> uplink += value
-                                "downlink" -> downlink += value
+                            when (parts[0]) {
+                                "proxy" -> when (parts[1]) {
+                                    "uplink" -> uplink += value
+                                    "downlink" -> downlink += value
+                                }
+                                "direct" -> directTotal += value
                             }
                         }
                     }
                 }
                 VpnStateHolder.updateTraffic(uplink, downlink)
-                val speedText = "↑ ${formatSpeed(uplink)}  |  ↓ ${formatSpeed(downlink)}"
-                updateNotification("$currentServerRemarks • $speedText")
+                if (speedDisplayEnabled) {
+                    val dominantTag = if (directTotal > uplink + downlink) "Direct" else "Proxy"
+                    val speedText = "↑ ${formatSpeed(uplink)} | ↓ ${formatSpeed(downlink)} ($dominantTag)"
+                    updateNotification("$currentServerRemarks • $speedText")
+                }
             }
         }
     }

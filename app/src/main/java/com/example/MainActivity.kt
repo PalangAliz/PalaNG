@@ -75,7 +75,10 @@ class MainActivity : ComponentActivity() {
                 LocalConfiguration provides localizedContext.resources.configuration,
                 LocalLayoutDirection provides layoutDirection
             ) {
-                XrayNgTheme(themeMode = settings.themeMode) {
+                XrayNgTheme(
+                    themeMode = settings.themeMode,
+                    dynamicColor = settings.dynamicColorEnabled
+                ) {
                     val navController = rememberNavController()
 
                     val vpnConsentLauncher = rememberLauncherForActivityResult(

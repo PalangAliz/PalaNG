@@ -26,6 +26,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -45,6 +49,7 @@ import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RssFeed
@@ -54,6 +59,8 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -110,6 +117,7 @@ import com.example.data.model.ServerConfig
 import com.example.data.model.ThemeMode
 import com.example.service.ConnectionState
 import com.example.service.XrayVpnService
+import com.example.ui.ConnectionInfoState
 import com.example.ui.MainViewModel
 import com.example.ui.theme.AmberLatency
 import com.example.ui.theme.CoralError
@@ -137,6 +145,8 @@ fun HomeScreen(
     val isTestingActiveDelay by viewModel.isTestingActiveDelay.collectAsStateWithLifecycle()
     val routingRules by viewModel.routingRulesFlow.collectAsStateWithLifecycle()
     val vpnError by viewModel.vpnError.collectAsStateWithLifecycle()
+    val connectionInfoState by viewModel.connectionInfoState.collectAsStateWithLifecycle()
+    val activeProxy by viewModel.activeProxy.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -147,6 +157,7 @@ fun HomeScreen(
     var showAddMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var shareTarget by remember { mutableStateOf<ServerConfig?>(null) }
+    var deleteConfirmTarget by remember { mutableStateOf<ServerConfig?>(null) }
 
     val jsonFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -166,12 +177,49 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(uiState.settings.showAllGroupTab, uiState.settings.selectedGroupId) {
+        if (!uiState.settings.showAllGroupTab && uiState.settings.selectedGroupId == AppSettings.GROUP_ALL) {
+            viewModel.selectGroup(AppSettings.GROUP_DEFAULT)
+        }
+    }
+
     LaunchedEffect(vpnError) {
         val err = vpnError
         if (!err.isNullOrBlank()) {
             snackbarHostState.showSnackbar(err)
             viewModel.clearVpnError()
         }
+    }
+
+    deleteConfirmTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteConfirmTarget = null },
+            title = { Text(stringResource(R.string.confirm_delete_title)) },
+            text = { Text(stringResource(R.string.confirm_delete_message, target.remarks)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteServer(target.id)
+                        deleteConfirmTarget = null
+                    }
+                ) {
+                    Text(stringResource(R.string.action_delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteConfirmTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    if (connectionInfoState !is ConnectionInfoState.Idle) {
+        ConnectionInfoDialog(
+            state = connectionInfoState,
+            onRetest = { viewModel.testCurrentConnectionInfo() },
+            onDismiss = { viewModel.clearConnectionInfo() }
+        )
     }
 
     shareTarget?.let { target ->
@@ -472,6 +520,16 @@ fun HomeScreen(
                                         viewModel.testAllVisibleDelay()
                                     }
                                 )
+                                if (uiState.connectionState == ConnectionState.CONNECTED) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_connection_info)) },
+                                        leadingIcon = { Icon(Icons.Outlined.Public, null) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.testCurrentConnectionInfo()
+                                        }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.menu_sort_delay)) },
                                     onClick = {
@@ -533,6 +591,8 @@ fun HomeScreen(
                     connectionState = uiState.connectionState,
                     activeRemarks = uiState.servers.firstOrNull { it.id == uiState.settings.selectedServerId }?.remarks
                         ?: "",
+                    speedDisplayEnabled = uiState.settings.speedDisplayEnabled,
+                    activeSocksPort = if (activeProxy.enabled && uiState.settings.dynamicProxyPortEnabled) activeProxy.socksPort else null,
                     uplinkBps = trafficStats.uplinkSpeedBps,
                     downlinkBps = trafficStats.downlinkSpeedBps,
                     totalUpload = trafficStats.totalUploadBytes,
@@ -544,6 +604,7 @@ fun HomeScreen(
                             viewModel.measureConnectedDelay()
                         }
                     },
+                    onTestConnectionInfo = { viewModel.testCurrentConnectionInfo() },
                     onToggleConnect = onRequestConnect
                 )
             }
@@ -582,12 +643,14 @@ fun HomeScreen(
                         .padding(horizontal = 16.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
-                        selected = uiState.settings.selectedGroupId == AppSettings.GROUP_ALL,
-                        onClick = { viewModel.selectGroup(AppSettings.GROUP_ALL) },
-                        label = { Text("${stringResource(R.string.group_all)} (${uiState.servers.size})") },
-                        modifier = Modifier.testTag("group_chip_all")
-                    )
+                    if (uiState.settings.showAllGroupTab) {
+                        FilterChip(
+                            selected = uiState.settings.selectedGroupId == AppSettings.GROUP_ALL,
+                            onClick = { viewModel.selectGroup(AppSettings.GROUP_ALL) },
+                            label = { Text("${stringResource(R.string.group_all)} (${uiState.servers.size})") },
+                            modifier = Modifier.testTag("group_chip_all")
+                        )
+                    }
                     val defaultCount = uiState.servers.count { it.subscriptionId.isEmpty() }
                     FilterChip(
                         selected = uiState.settings.selectedGroupId == AppSettings.GROUP_DEFAULT,
@@ -643,6 +706,36 @@ fun HomeScreen(
                         onScanQr = onNavigateQrScanner,
                         onManualAdd = { onNavigateEdit(null, ProtocolType.VLESS.name) }
                     )
+                } else if (uiState.settings.twoColumnLayout) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        gridItems(uiState.visibleServers, key = { it.id }) { server ->
+                            val isSelected = server.id == uiState.settings.selectedServerId
+                            val isConnected = isSelected && uiState.connectionState == ConnectionState.CONNECTED
+                            CompactServerGridCard(
+                                server = server,
+                                isSelected = isSelected,
+                                isConnected = isConnected,
+                                onSelect = { viewModel.selectServer(server.id) },
+                                onTestDelay = { viewModel.testSingleServerDelay(server) },
+                                onShare = { shareTarget = server },
+                                onEdit = { onNavigateEdit(server.id, server.protocol.name) },
+                                onDelete = {
+                                    if (uiState.settings.confirmDeleteConfig) {
+                                        deleteConfirmTarget = server
+                                    } else {
+                                        viewModel.deleteServer(server.id)
+                                    }
+                                }
+                            )
+                        }
+                        item(span = { GridItemSpan(2) }) { Spacer(modifier = Modifier.height(12.dp)) }
+                    }
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
@@ -660,7 +753,13 @@ fun HomeScreen(
                                 onTestDelay = { viewModel.testSingleServerDelay(server) },
                                 onShare = { shareTarget = server },
                                 onEdit = { onNavigateEdit(server.id, server.protocol.name) },
-                                onDelete = { viewModel.deleteServer(server.id) }
+                                onDelete = {
+                                    if (uiState.settings.confirmDeleteConfig) {
+                                        deleteConfirmTarget = server
+                                    } else {
+                                        viewModel.deleteServer(server.id)
+                                    }
+                                }
                             )
                         }
                         item { Spacer(modifier = Modifier.height(12.dp)) }
@@ -872,9 +971,219 @@ private fun LatencyBadge(latencyMs: Long, onClick: () -> Unit) {
 }
 
 @Composable
+private fun CompactServerGridCard(
+    server: ServerConfig,
+    isSelected: Boolean,
+    isConnected: Boolean,
+    onSelect: () -> Unit,
+    onTestDelay: () -> Unit,
+    onShare: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val indicatorColor by animateColorAsState(
+        targetValue = when {
+            isConnected -> EmeraldConnected
+            isSelected -> MaterialTheme.colorScheme.primary
+            else -> Color.Transparent
+        },
+        label = "gridIndicatorColor"
+    )
+    val cardContainer = if (isSelected) {
+        MaterialTheme.colorScheme.surfaceContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    }
+    val cardBorder = BorderStroke(
+        width = 1.dp,
+        color = when {
+            isConnected -> EmeraldConnected.copy(alpha = 0.5f)
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+            else -> MaterialTheme.colorScheme.outlineVariant
+        }
+    )
+    var showCardMenu by remember { mutableStateOf(false) }
+
+    Card(
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = cardContainer),
+        border = cardBorder,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .testTag("server_card_${server.id}")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(indicatorColor)
+            )
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ProtocolBadge(server.protocol)
+                    LatencyBadge(latencyMs = server.latencyMs, onClick = onTestDelay)
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = server.remarks,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = server.maskedAddress(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box {
+                        IconButton(
+                            onClick = { showCardMenu = true },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.MoreVert,
+                                contentDescription = "More actions for ${server.remarks}",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showCardMenu,
+                            onDismissRequest = { showCardMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Share") },
+                                leadingIcon = { Icon(Icons.Outlined.Share, null) },
+                                onClick = {
+                                    showCardMenu = false
+                                    onShare()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Edit") },
+                                leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                onClick = {
+                                    showCardMenu = false
+                                    onEdit()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    showCardMenu = false
+                                    onDelete()
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionInfoDialog(
+    state: ConnectionInfoState,
+    onRetest: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.menu_connection_info)) },
+        text = {
+            when (state) {
+                ConnectionInfoState.Loading -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
+                        Text(stringResource(R.string.checking_connection))
+                    }
+                }
+                is ConnectionInfoState.Success -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "${state.elapsedMs} ms • ${state.url}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (state.summaryLines.isNotEmpty()) {
+                            state.summaryLines.forEach { (label, value) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = value,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = state.rawBody.take(400),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+                is ConnectionInfoState.Error -> {
+                    Text(
+                        text = state.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                ConnectionInfoState.Idle -> Unit
+            }
+        },
+        confirmButton = {
+            if (state !is ConnectionInfoState.Loading) {
+                TextButton(onClick = onRetest) {
+                    Text(stringResource(R.string.action_retest))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    )
+}
+
+@Composable
 private fun VpnBottomControlDock(
     connectionState: ConnectionState,
     activeRemarks: String,
+    speedDisplayEnabled: Boolean,
+    activeSocksPort: Int?,
     uplinkBps: Long,
     downlinkBps: Long,
     totalUpload: Long,
@@ -882,6 +1191,7 @@ private fun VpnBottomControlDock(
     lastTestedDelay: Long?,
     isTestingDelay: Boolean,
     onTapStatusTest: () -> Unit,
+    onTestConnectionInfo: () -> Unit,
     onToggleConnect: () -> Unit
 ) {
     val isConnected = connectionState == ConnectionState.CONNECTED
@@ -914,7 +1224,7 @@ private fun VpnBottomControlDock(
                         .weight(1f)
                         .clip(RoundedCornerShape(10.dp))
                         .clickable(enabled = isConnected, onClick = onTapStatusTest)
-                        .padding(end = 12.dp, top = 4.dp, bottom = 4.dp)
+                        .padding(end = 8.dp, top = 4.dp, bottom = 4.dp)
                         .testTag("bottom_status_bar")
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -952,9 +1262,19 @@ private fun VpnBottomControlDock(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     if (isConnected) {
+                        val subStatus = buildString {
+                            if (speedDisplayEnabled) {
+                                append("↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  ")
+                                append("↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})")
+                            } else {
+                                append(activeRemarks.ifBlank { "PalaNG" })
+                            }
+                            if (activeSocksPort != null) {
+                                append("  •  :$activeSocksPort")
+                            }
+                        }
                         Text(
-                            text = "↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  " +
-                                "↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})",
+                            text = subStatus,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -967,6 +1287,19 @@ private fun VpnBottomControlDock(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (isConnected) {
+                    IconButton(
+                        onClick = onTestConnectionInfo,
+                        modifier = Modifier.testTag("connection_info_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Public,
+                            contentDescription = stringResource(R.string.menu_connection_info),
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }

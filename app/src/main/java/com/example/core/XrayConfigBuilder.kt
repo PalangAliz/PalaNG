@@ -14,30 +14,36 @@ object XrayConfigBuilder {
         server: ServerConfig,
         settings: AppSettings,
         customRules: List<RoutingRule>,
-        amirLocalPort: Int = 0
+        amirLocalPort: Int = 0,
+        resolvedServerHosts: Map<String, List<String>> = emptyMap(),
+        runtimeSocksPort: Int? = null,
+        runtimeHttpPort: Int? = null
     ): String {
         if (server.protocol == ProtocolType.CUSTOM && server.rawCustomJson.isNotBlank()) {
-            return buildCustomConfigWithInjectedSettings(server.rawCustomJson, settings)
+            return buildCustomConfigWithInjectedSettings(server.rawCustomJson, settings, resolvedServerHosts)
         }
 
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", settings.logLevel))
         root.put("stats", JSONObject())
         root.put("policy", buildPolicy())
-        root.put("inbounds", buildInbounds(settings))
+        root.put("inbounds", buildInbounds(settings, runtimeSocksPort, runtimeHttpPort))
         root.put("outbounds", buildOutbounds(server, settings, amirLocalPort))
+
         val isAmir = server.protocol == ProtocolType.AMIR
-        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
-            root.put("dns", buildDns(settings, isAmir))
+        val hostsObj = buildDnsHostsObject(settings.dnsHosts, resolvedServerHosts)
+        if (settings.localDnsEnabled || settings.fakeDnsEnabled || hostsObj.length() > 0) {
+            root.put("dns", buildDns(settings, isAmir, hostsObj))
         }
         root.put("routing", buildRouting(settings, customRules, isAmir))
+
         if (settings.fakeDnsEnabled) {
             val fakeDnsArr = JSONArray().put(
                 JSONObject()
                     .put("ipPool", "198.18.0.0/15")
                     .put("poolSize", 65535)
             )
-            if (settings.preferIpv6) {
+            if (settings.enableIpv6 || settings.preferIpv6) {
                 fakeDnsArr.put(
                     JSONObject()
                         .put("ipPool", "fc00::/18")
@@ -46,6 +52,36 @@ object XrayConfigBuilder {
             }
             root.put("fakedns", fakeDnsArr)
         }
+
+        val testUrl = settings.delayTestUrl.trim().ifBlank { "https://www.gstatic.com/generate_204" }
+        when (settings.observatoryMode) {
+            AppSettings.OBSERVATORY_LEAST_PING -> {
+                root.put(
+                    "observatory",
+                    JSONObject()
+                        .put("subjectSelector", JSONArray().put("proxy"))
+                        .put("probeUrl", testUrl)
+                        .put("probeInterval", settings.observatoryInterval.trim().ifBlank { "3m" })
+                )
+            }
+            AppSettings.OBSERVATORY_LEAST_LOAD -> {
+                root.put(
+                    "burstObservatory",
+                    JSONObject()
+                        .put("subjectSelector", JSONArray().put("proxy"))
+                        .put(
+                            "pingConfig",
+                            JSONObject()
+                                .put("destination", testUrl)
+                                .put("httpMethod", settings.burstObservatoryHttpMethod.ifBlank { "HEAD" })
+                                .put("interval", settings.burstObservatoryInterval.trim().ifBlank { "5m" })
+                                .put("sampling", settings.burstObservatorySampling.coerceIn(1, 20))
+                                .put("timeout", settings.burstObservatoryTimeout.trim().ifBlank { "30s" })
+                        )
+                )
+            }
+        }
+
         return root.toString(2)
     }
 
@@ -65,7 +101,11 @@ object XrayConfigBuilder {
         return root.toString()
     }
 
-    private fun buildCustomConfigWithInjectedSettings(rawJson: String, settings: AppSettings): String {
+    private fun buildCustomConfigWithInjectedSettings(
+        rawJson: String,
+        settings: AppSettings,
+        resolvedServerHosts: Map<String, List<String>>
+    ): String {
         return runCatching {
             val root = JSONObject(rawJson)
             if (!root.has("stats")) root.put("stats", JSONObject())
@@ -74,14 +114,46 @@ object XrayConfigBuilder {
                 val inbounds = root.optJSONArray("inbounds") ?: JSONArray()
                 var hasTun = false
                 for (i in 0 until inbounds.length()) {
-                    if (inbounds.optJSONObject(i)?.optString("protocol") == "tun") {
+                    val ib = inbounds.optJSONObject(i)
+                    if (ib?.optString("protocol") == "tun") {
                         hasTun = true
+                        ib.optJSONObject("settings")?.put("MTU", settings.vpnMtu.coerceIn(1280, 9000))
                         break
                     }
                 }
                 if (!hasTun) {
                     inbounds.put(buildTunInbound(settings))
                     root.put("inbounds", inbounds)
+                }
+            }
+            val hostsObj = buildDnsHostsObject(settings.dnsHosts, resolvedServerHosts)
+            if (hostsObj.length() > 0) {
+                val dnsObj = root.optJSONObject("dns") ?: JSONObject()
+                val existingHosts = dnsObj.optJSONObject("hosts") ?: JSONObject()
+                val keys = hostsObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    if (!existingHosts.has(k)) {
+                        existingHosts.put(k, hostsObj.get(k))
+                    }
+                }
+                dnsObj.put("hosts", existingHosts)
+                root.put("dns", dnsObj)
+            }
+            val testUrl = settings.delayTestUrl.trim().ifBlank { "https://www.gstatic.com/generate_204" }
+            root.optJSONObject("observatory")?.let { obs ->
+                obs.put("probeInterval", settings.observatoryInterval.trim().ifBlank { "3m" })
+                if (!obs.has("probeUrl") || obs.optString("probeUrl").isBlank()) {
+                    obs.put("probeUrl", testUrl)
+                }
+            }
+            root.optJSONObject("burstObservatory")?.optJSONObject("pingConfig")?.let { ping ->
+                ping.put("interval", settings.burstObservatoryInterval.trim().ifBlank { "5m" })
+                ping.put("httpMethod", settings.burstObservatoryHttpMethod.ifBlank { "HEAD" })
+                ping.put("sampling", settings.burstObservatorySampling.coerceIn(1, 20))
+                ping.put("timeout", settings.burstObservatoryTimeout.trim().ifBlank { "30s" })
+                if (!ping.has("destination") || ping.optString("destination").isBlank()) {
+                    ping.put("destination", testUrl)
                 }
             }
             root.toString(2)
@@ -110,7 +182,11 @@ object XrayConfigBuilder {
         }
     }
 
-    private fun buildInbounds(settings: AppSettings): JSONArray {
+    private fun buildInbounds(
+        settings: AppSettings,
+        runtimeSocksPort: Int? = null,
+        runtimeHttpPort: Int? = null
+    ): JSONArray {
         val inbounds = JSONArray()
         val listenHost = if (settings.allowLan) "0.0.0.0" else "127.0.0.1"
         val sniffing = buildSniffing(settings)
@@ -119,27 +195,53 @@ object XrayConfigBuilder {
             inbounds.put(buildTunInbound(settings))
         }
 
-        inbounds.put(
-            JSONObject().apply {
-                put("tag", "socks")
-                put("port", settings.socksPort)
-                put("listen", listenHost)
-                put("protocol", "socks")
-                put("settings", JSONObject().put("auth", "noauth").put("udp", true).put("userLevel", 8))
-                put("sniffing", sniffing)
+        if (settings.effectiveLocalProxyEnabled()) {
+            val hasAuth = settings.localProxyUsername.isNotBlank() || settings.localProxyPassword.isNotBlank()
+            val accountsArr = if (hasAuth) {
+                JSONArray().put(
+                    JSONObject()
+                        .put("user", settings.localProxyUsername)
+                        .put("pass", settings.localProxyPassword)
+                )
+            } else {
+                null
             }
-        )
 
-        inbounds.put(
-            JSONObject().apply {
-                put("tag", "http")
-                put("port", settings.httpPort)
-                put("listen", listenHost)
-                put("protocol", "http")
-                put("settings", JSONObject().put("userLevel", 8))
-                put("sniffing", sniffing)
+            val socksSettings = JSONObject()
+                .put("auth", if (hasAuth) "password" else "noauth")
+                .put("udp", settings.socks5UdpEnabled)
+                .put("userLevel", 8)
+            if (accountsArr != null) {
+                socksSettings.put("accounts", accountsArr)
             }
-        )
+
+            inbounds.put(
+                JSONObject().apply {
+                    put("tag", "socks")
+                    put("port", runtimeSocksPort ?: settings.socksPort)
+                    put("listen", listenHost)
+                    put("protocol", "socks")
+                    put("settings", socksSettings)
+                    put("sniffing", sniffing)
+                }
+            )
+
+            val httpSettings = JSONObject().put("userLevel", 8)
+            if (accountsArr != null) {
+                httpSettings.put("accounts", accountsArr)
+            }
+
+            inbounds.put(
+                JSONObject().apply {
+                    put("tag", "http")
+                    put("port", runtimeHttpPort ?: settings.httpPort)
+                    put("listen", listenHost)
+                    put("protocol", "http")
+                    put("settings", httpSettings)
+                    put("sniffing", sniffing)
+                }
+            )
+        }
         return inbounds
     }
 
@@ -152,7 +254,7 @@ object XrayConfigBuilder {
                 "settings",
                 JSONObject()
                     .put("name", "xray0")
-                    .put("MTU", 1500)
+                    .put("MTU", settings.vpnMtu.coerceIn(1280, 9000))
                     .put("userLevel", 8)
             )
             put("sniffing", buildSniffing(settings))
@@ -183,11 +285,18 @@ object XrayConfigBuilder {
         if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
             outbounds.put(buildFragmentOutbound(settings))
         }
+        val directDomainStrategy = when (settings.outboundDomainResolve) {
+            AppSettings.OUTBOUND_AS_IS -> "AsIs"
+            AppSettings.OUTBOUND_USE_IP -> "UseIP"
+            AppSettings.OUTBOUND_USE_IPV4 -> "UseIPv4"
+            AppSettings.OUTBOUND_USE_IPV6 -> "UseIPv6"
+            else -> if (settings.preferIpv6) "UseIP" else "UseIPv4"
+        }
         outbounds.put(
             JSONObject().apply {
                 put("tag", "direct")
                 put("protocol", "freedom")
-                put("settings", JSONObject().put("domainStrategy", "UseIP"))
+                put("settings", JSONObject().put("domainStrategy", directDomainStrategy))
             }
         )
         outbounds.put(
@@ -207,19 +316,18 @@ object XrayConfigBuilder {
     }
 
     private fun buildFragmentOutbound(settings: AppSettings): JSONObject {
+        val fragmentObj = JSONObject()
+            .put("packets", settings.fragmentPackets.ifBlank { "tlshello" })
+            .put("length", settings.fragmentLength.ifBlank { "100-200" })
+            .put("interval", settings.fragmentInterval.ifBlank { "10-20" })
+        val maxSplit = settings.fragmentMaxSplit.trim()
+        if (maxSplit.isNotEmpty()) {
+            fragmentObj.put("maxSplit", maxSplit)
+        }
         return JSONObject().apply {
             put("tag", "fragment")
             put("protocol", "freedom")
-            put(
-                "settings",
-                JSONObject().put(
-                    "fragment",
-                    JSONObject()
-                        .put("packets", settings.fragmentPackets.ifBlank { "tlshello" })
-                        .put("length", settings.fragmentLength.ifBlank { "100-200" })
-                        .put("interval", settings.fragmentInterval.ifBlank { "10-20" })
-                )
-            )
+            put("settings", JSONObject().put("fragment", fragmentObj))
         }
     }
 
@@ -400,7 +508,9 @@ object XrayConfigBuilder {
                 "mux",
                 JSONObject()
                     .put("enabled", true)
-                    .put("concurrency", settings.muxConcurrency.coerceIn(1, 1024))
+                    .put("concurrency", settings.muxConcurrency.coerceIn(-1, 1024))
+                    .put("xudpConcurrency", settings.muxXudpConcurrency.coerceIn(-1, 1024))
+                    .put("xudpProxyUDP443", settings.muxXudpProxyUdp443.ifBlank { "reject" })
             )
         }
 
@@ -504,7 +614,7 @@ object XrayConfigBuilder {
             }
         }
 
-        if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD) {
+        if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
             stream.put("sockopt", JSONObject().put("dialerProxy", "fragment"))
         }
 
@@ -537,15 +647,68 @@ object XrayConfigBuilder {
         }
     }
 
-    private fun buildDns(settings: AppSettings, isAmir: Boolean = false): JSONObject {
+    fun parseDnsHosts(raw: String): Map<String, List<String>> {
+        if (raw.isBlank()) return emptyMap()
+        val result = linkedMapOf<String, List<String>>()
+        val prefixes = listOf("domain:", "full:", "keyword:", "regexp:", "geosite:")
+        raw.split(',', '\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .forEach { entry ->
+                val matchedPrefix = prefixes.firstOrNull { entry.startsWith(it, ignoreCase = true) }
+                val searchStart = matchedPrefix?.length ?: 0
+                val colonIdx = entry.indexOf(':', startIndex = searchStart)
+                if (colonIdx > 0 && colonIdx < entry.length - 1) {
+                    val domain = entry.substring(0, colonIdx).trim()
+                    val targetRaw = entry.substring(colonIdx + 1).trim()
+                    val targets = targetRaw.split(';').map { it.trim() }.filter { it.isNotEmpty() }
+                    if (domain.isNotEmpty() && targets.isNotEmpty()) {
+                        result[domain] = targets
+                    }
+                }
+            }
+        return result
+    }
+
+    private fun buildDnsHostsObject(
+        rawDnsHosts: String,
+        resolvedServerHosts: Map<String, List<String>>
+    ): JSONObject {
+        val merged = linkedMapOf<String, List<String>>()
+        resolvedServerHosts.forEach { (domain, ips) ->
+            val cleanIps = ips.map { it.trim() }.filter { it.isNotEmpty() }
+            if (domain.isNotBlank() && cleanIps.isNotEmpty()) {
+                merged[domain.trim()] = cleanIps
+            }
+        }
+        // User-configured DNS host mappings override auto-resolved server host mappings
+        parseDnsHosts(rawDnsHosts).forEach { (domain, ips) ->
+            merged[domain] = ips
+        }
+        return JSONObject().apply {
+            merged.forEach { (domain, ips) ->
+                if (ips.size == 1) {
+                    put(domain, ips.first())
+                } else {
+                    val arr = JSONArray()
+                    ips.forEach { arr.put(it) }
+                    put(domain, arr)
+                }
+            }
+        }
+    }
+
+    private fun buildDns(
+        settings: AppSettings,
+        isAmir: Boolean = false,
+        hostsObj: JSONObject = JSONObject()
+    ): JSONObject {
         val servers = JSONArray()
         val domestic = if (isAmir) {
-            // Avoid plain UDP to external domestic IP through TCP-only Amir; use local direct resolver for domestic rules only.
             "localhost"
         } else {
             settings.domesticDns.ifBlank { "223.5.5.5" }
         }
-        // Place domain-scoped domestic DNS before catch-all FakeDNS so bypassed domestic domains resolve to real IPs
         when (settings.routingMode) {
             RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
                 servers.put(
@@ -581,17 +744,20 @@ object XrayConfigBuilder {
             configuredRemote.contains("1.0.0.3") ||
             configuredRemote.contains("cloudflare-dns.com", ignoreCase = true) ||
             configuredRemote.contains("one.one.one.one", ignoreCase = true)
-        // Cloudflare Workers' connect() blocks outbound sockets to Cloudflare's own 1.1.1.1/1.0.0.1 IPs,
-        // and Amir only tunnels TCP. Route fallback DNS queries (e.g. AAAA/HTTPS Type 65) via Google DoH.
         val effectiveRemote = if (isAmir && (!isTcpCapableScheme || isCloudflareEndpoint)) {
             "https://8.8.8.8/dns-query"
         } else {
             configuredRemote
         }
         servers.put(effectiveRemote)
-        return JSONObject()
+
+        val dnsObj = JSONObject()
             .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
             .put("servers", servers)
+        if (hostsObj.length() > 0) {
+            dnsObj.put("hosts", hostsObj)
+        }
+        return dnsObj
     }
 
     private fun buildRouting(
@@ -601,21 +767,28 @@ object XrayConfigBuilder {
     ): JSONObject {
         val rules = JSONArray()
 
-        // DNS hijack / resolution routing when Local DNS or FakeDNS is enabled
         if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
-            rules.put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("inboundTag", JSONArray().put("tun").put("socks").put("http"))
-                    .put("port", "53")
-                    .put("outboundTag", "dns-out")
-            )
+            val dnsInboundTags = JSONArray().apply {
+                if (settings.vpnMode) put("tun")
+                if (settings.effectiveLocalProxyEnabled()) {
+                    put("socks")
+                    put("http")
+                }
+            }
+            if (dnsInboundTags.length() > 0) {
+                rules.put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put("inboundTag", dnsInboundTags)
+                        .put("port", "53")
+                        .put("outboundTag", "dns-out")
+                )
+            }
         }
 
-        // Route FakeDNS synthetic IP pool directly to proxy outbound (matches v2rayNG)
         if (settings.fakeDnsEnabled) {
             val fakeIps = JSONArray().put("198.18.0.0/15")
-            if (settings.preferIpv6) {
+            if (settings.enableIpv6 || settings.preferIpv6) {
                 fakeIps.put("fc00::/18")
             }
             rules.put(
@@ -664,7 +837,6 @@ object XrayConfigBuilder {
                 )
             }
             RoutingMode.GLOBAL_PROXY -> {
-                // Only keep LAN bypass if explicitly enabled in settings
                 if (settings.bypassLan) {
                     rules.put(
                         JSONObject()
@@ -700,8 +872,6 @@ object XrayConfigBuilder {
             }
         }
 
-        // Amir local SOCKS5 tunnel is TCP-only; block non-DNS UDP (e.g. QUIC/UDP-443) so browsers
-        // and messaging apps immediately fall back to TCP without stalling on UDP timeouts.
         if (isAmir) {
             rules.put(
                 JSONObject()
@@ -711,7 +881,6 @@ object XrayConfigBuilder {
             )
         }
 
-        // Default fallback rule to proxy
         rules.put(
             JSONObject()
                 .put("type", "field")
@@ -720,8 +889,6 @@ object XrayConfigBuilder {
         )
 
         val effectiveDomainStrategy = if (isAmir && settings.fakeDnsEnabled) {
-            // FakeDNS already assigns synthetic IPs and sniffs back to domain; avoid blocking every
-            // outbound connection on a synchronous Router DNS lookup via IPIfNonMatch.
             "AsIs"
         } else {
             settings.domainStrategy.ifBlank { "IPIfNonMatch" }
