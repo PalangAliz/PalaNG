@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -92,7 +93,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -101,6 +101,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.model.AppSettings
@@ -111,13 +112,8 @@ import com.example.service.ConnectionState
 import com.example.service.XrayVpnService
 import com.example.ui.MainViewModel
 import com.example.ui.theme.AmberLatency
-import com.example.ui.theme.BlueProtocol
 import com.example.ui.theme.CoralError
-import com.example.ui.theme.CyanPrimary
 import com.example.ui.theme.EmeraldConnected
-import com.example.ui.theme.IndigoProtocol
-import com.example.ui.theme.PurpleReality
-import com.example.ui.theme.TealProtocol
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -200,24 +196,24 @@ fun HomeScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    MaterialTheme.colorScheme.surfaceContainerHigh
-                                )
-                            )
-                        )
-                        .padding(horizontal = 20.dp, vertical = 24.dp)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(horizontal = 20.dp, vertical = 22.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Image(
-                            painter = painterResource(id = R.drawable.palang_icon_fg_1794999354777),
-                            contentDescription = "PalaNG logo",
-                            modifier = Modifier
-                                .size(52.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            color = MaterialTheme.colorScheme.surface
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.palang_minimal_icon_1795003260717),
+                                contentDescription = "PalaNG logo",
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .padding(2.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                            )
+                        }
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
                             Text(
@@ -227,7 +223,8 @@ fun HomeScreen(
                             )
                             Text(
                                 text = stringResource(R.string.brand_subtitle),
-                                style = MaterialTheme.typography.labelMedium,
+                                style = MaterialTheme.typography.labelSmall,
+                                letterSpacing = 1.4.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
@@ -236,6 +233,7 @@ fun HomeScreen(
                         }
                     }
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(modifier = Modifier.height(8.dp))
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_profiles)) },
@@ -337,35 +335,37 @@ fun HomeScreen(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-                TopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    navigationIcon = {
-                        IconButton(
-                            onClick = { scope.launch { drawerState.open() } },
-                            modifier = Modifier.testTag("drawer_menu_button")
-                        ) {
-                            Icon(Icons.Outlined.Menu, contentDescription = "Open navigation drawer")
-                        }
-                    },
-                    title = {
-                        Column {
-                            Text(
-                                text = stringResource(R.string.app_name),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = stringResource(R.string.brand_subtitle),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    },
-                    actions = {
+                Column {
+                    TopAppBar(
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        navigationIcon = {
+                            IconButton(
+                                onClick = { scope.launch { drawerState.open() } },
+                                modifier = Modifier.testTag("drawer_menu_button")
+                            ) {
+                                Icon(Icons.Outlined.Menu, contentDescription = "Open navigation drawer")
+                            }
+                        },
+                        title = {
+                            Column {
+                                Text(
+                                    text = stringResource(R.string.app_name),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = stringResource(R.string.brand_subtitle),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    letterSpacing = 1.2.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        },
+                        actions = {
                         val isDark = uiState.settings.themeMode == ThemeMode.DARK
                         IconButton(
                             onClick = {
@@ -525,6 +525,8 @@ fun HomeScreen(
                         }
                     }
                 )
+                HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                }
             },
             bottomBar = {
                 VpnBottomControlDock(
@@ -689,14 +691,23 @@ private fun ServerProfileCard(
         label = "indicatorColor"
     )
     val cardContainer = if (isSelected) {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    } else {
         MaterialTheme.colorScheme.surfaceContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLow
     }
+    val cardBorder = BorderStroke(
+        width = 1.dp,
+        color = when {
+            isConnected -> EmeraldConnected.copy(alpha = 0.5f)
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+            else -> MaterialTheme.colorScheme.outlineVariant
+        }
+    )
 
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = cardContainer),
+        border = cardBorder,
         modifier = Modifier
             .fillMaxWidth()
             .widthIn(max = 720.dp)
@@ -706,12 +717,12 @@ private fun ServerProfileCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(82.dp),
+                .height(78.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .width(5.dp)
+                    .width(3.dp)
                     .fillMaxHeight()
                     .background(indicatorColor)
             )
@@ -750,7 +761,7 @@ private fun ServerProfileCard(
                     Text(
                         text = "• ${server.transportSummary()}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1
                     )
                 }
@@ -770,7 +781,7 @@ private fun ServerProfileCard(
                         Icon(
                             Icons.Outlined.Share,
                             contentDescription = "Share ${server.remarks}",
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(17.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -781,7 +792,7 @@ private fun ServerProfileCard(
                         Icon(
                             Icons.Outlined.Edit,
                             contentDescription = "Edit ${server.remarks}",
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(17.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -792,7 +803,7 @@ private fun ServerProfileCard(
                         Icon(
                             Icons.Outlined.DeleteOutline,
                             contentDescription = "Delete ${server.remarks}",
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(17.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -804,29 +815,24 @@ private fun ServerProfileCard(
 
 @Composable
 private fun ProtocolBadge(protocol: ProtocolType) {
-    val bg = when (protocol) {
-        ProtocolType.VLESS -> CyanPrimary.copy(alpha = 0.16f)
-        ProtocolType.VMESS -> BlueProtocol.copy(alpha = 0.16f)
-        ProtocolType.TROJAN -> PurpleReality.copy(alpha = 0.16f)
-        ProtocolType.SHADOWSOCKS -> IndigoProtocol.copy(alpha = 0.16f)
-        ProtocolType.WIREGUARD -> EmeraldConnected.copy(alpha = 0.16f)
-        ProtocolType.HYSTERIA2 -> TealProtocol.copy(alpha = 0.16f)
-        ProtocolType.AMIR -> AmberLatency.copy(alpha = 0.18f)
-        else -> MaterialTheme.colorScheme.surfaceVariant
+    val isAmir = protocol == ProtocolType.AMIR
+    val bg = if (isAmir) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
     }
-    val fg = when (protocol) {
-        ProtocolType.VLESS -> CyanPrimary
-        ProtocolType.VMESS -> BlueProtocol
-        ProtocolType.TROJAN -> PurpleReality
-        ProtocolType.SHADOWSOCKS -> IndigoProtocol
-        ProtocolType.WIREGUARD -> EmeraldConnected
-        ProtocolType.HYSTERIA2 -> TealProtocol
-        ProtocolType.AMIR -> AmberLatency
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    val fg = if (isAmir) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(
         color = bg,
-        shape = RoundedCornerShape(6.dp)
+        shape = RoundedCornerShape(5.dp),
+        border = BorderStroke(
+            width = 0.75.dp,
+            color = if (isAmir) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) else MaterialTheme.colorScheme.outlineVariant
+        )
     ) {
         Text(
             text = protocol.displayName.uppercase(),
@@ -848,11 +854,12 @@ private fun LatencyBadge(latencyMs: Long, onClick: () -> Unit) {
         else -> "${latencyMs} ms" to CoralError
     }
     Surface(
-        color = color.copy(alpha = 0.14f),
-        shape = RoundedCornerShape(8.dp),
+        color = color.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(0.75.dp, color.copy(alpha = 0.25f)),
         modifier = Modifier
             .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(6.dp))
             .clickable(onClick = onClick)
     ) {
         Text(
@@ -889,105 +896,111 @@ private fun VpnBottomControlDock(
     )
 
     Surface(
-        tonalElevation = 6.dp,
-        shadowElevation = 8.dp,
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(
+        Column(modifier = Modifier.fillMaxWidth()) {
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(enabled = isConnected, onClick = onTapStatusTest)
-                    .padding(end = 12.dp, top = 4.dp, bottom = 4.dp)
-                    .testTag("bottom_status_bar")
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(9.dp)
-                            .clip(CircleShape)
-                            .background(
-                                when (connectionState) {
-                                    ConnectionState.CONNECTED -> EmeraldConnected
-                                    ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
-                                    ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outline
-                                }
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    val statusLabel = when (connectionState) {
-                        ConnectionState.DISCONNECTED -> stringResource(R.string.status_not_connected)
-                        ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
-                        ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
-                        ConnectionState.CONNECTED -> when {
-                            isTestingDelay -> stringResource(R.string.checking_connection)
-                            lastTestedDelay != null && lastTestedDelay >= 0 -> stringResource(R.string.connected_delay_ms, lastTestedDelay)
-                            lastTestedDelay != null && lastTestedDelay < 0 -> stringResource(R.string.connected_timeout)
-                            else -> stringResource(R.string.tap_to_test)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(enabled = isConnected, onClick = onTapStatusTest)
+                        .padding(end = 12.dp, top = 4.dp, bottom = 4.dp)
+                        .testTag("bottom_status_bar")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when (connectionState) {
+                                        ConnectionState.CONNECTED -> EmeraldConnected
+                                        ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
+                                        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outline
+                                    }
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val statusLabel = when (connectionState) {
+                            ConnectionState.DISCONNECTED -> stringResource(R.string.status_not_connected)
+                            ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
+                            ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
+                            ConnectionState.CONNECTED -> when {
+                                isTestingDelay -> stringResource(R.string.checking_connection)
+                                lastTestedDelay != null && lastTestedDelay >= 0 -> stringResource(R.string.connected_delay_ms, lastTestedDelay)
+                                lastTestedDelay != null && lastTestedDelay < 0 -> stringResource(R.string.connected_timeout)
+                                else -> stringResource(R.string.tap_to_test)
+                            }
                         }
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (isConnected) {
+                        Text(
+                            text = "↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  " +
+                                "↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
+                        Text(
+                            text = if (activeRemarks.isNotBlank()) stringResource(R.string.selected_server, activeRemarks) else stringResource(R.string.no_server_selected),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                if (isConnected) {
-                    Text(
-                        text = "↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  " +
-                            "↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                } else {
-                    Text(
-                        text = if (activeRemarks.isNotBlank()) stringResource(R.string.selected_server, activeRemarks) else stringResource(R.string.no_server_selected),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
 
-            FloatingActionButton(
-                onClick = onToggleConnect,
-                containerColor = fabContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                elevation = FloatingActionButtonDefaults.elevation(4.dp),
-                modifier = Modifier
-                    .size(56.dp)
-                    .testTag("vpn_connect_fab")
-            ) {
-                when {
-                    isBusy -> CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.5.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    isConnected -> Icon(
-                        imageVector = Icons.Outlined.Stop,
-                        contentDescription = "Disconnect VPN",
-                        modifier = Modifier.size(28.dp)
-                    )
-                    else -> Icon(
-                        imageVector = Icons.Outlined.PlayArrow,
-                        contentDescription = "Connect VPN",
-                        modifier = Modifier.size(28.dp)
-                    )
+                FloatingActionButton(
+                    onClick = onToggleConnect,
+                    shape = RoundedCornerShape(14.dp),
+                    containerColor = fabContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    elevation = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 1.dp,
+                        pressedElevation = 2.dp
+                    ),
+                    modifier = Modifier
+                        .size(52.dp)
+                        .testTag("vpn_connect_fab")
+                ) {
+                    when {
+                        isBusy -> CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.5.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        isConnected -> Icon(
+                            imageVector = Icons.Outlined.Stop,
+                            contentDescription = "Disconnect VPN",
+                            modifier = Modifier.size(26.dp)
+                        )
+                        else -> Icon(
+                            imageVector = Icons.Outlined.PlayArrow,
+                            contentDescription = "Connect VPN",
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1008,11 +1021,11 @@ private fun EmptyProfilesState(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Image(
-            painter = painterResource(id = R.drawable.palang_icon_fg_1794999354777),
+            painter = painterResource(id = R.drawable.palang_minimal_icon_1795003260717),
             contentDescription = "PalaNG logo",
             modifier = Modifier
-                .size(84.dp)
-                .clip(RoundedCornerShape(22.dp))
+                .size(80.dp)
+                .clip(RoundedCornerShape(18.dp))
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(

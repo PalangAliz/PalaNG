@@ -542,17 +542,14 @@ object XrayConfigBuilder {
         if (settings.fakeDnsEnabled) {
             servers.put("fakedns")
         }
-        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://8.8.8.8/dns-query" }
-        // Cloudflare Workers block outbound connect() to Cloudflare's own 1.1.1.1 / 1.0.0.1 IPs,
-        // and Amir's local SOCKS5 tunnel is TCP-only (UDP/QUIC DNS will fail). Ensure TCP/HTTPS DoH.
-        val isCloudflareDns = configuredRemote.contains("1.1.1.1") ||
-            configuredRemote.contains("1.0.0.1") ||
-            configuredRemote.contains("cloudflare-dns.com", ignoreCase = true)
+        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://1.1.1.1/dns-query" }
+        // Amir's local SOCKS5 tunnel is TCP-only; preserve the user's TCP/DoH resolver (e.g. 1.1.1.1 or 8.8.8.8 DoH)
+        // and only rewrite plain UDP or QUIC schemes to HTTPS DoH over TCP.
         val isTcpCapableScheme = configuredRemote.startsWith("https://", ignoreCase = true) ||
             configuredRemote.startsWith("https+local://", ignoreCase = true) ||
             configuredRemote.startsWith("tcp://", ignoreCase = true) ||
             configuredRemote.startsWith("tcp+local://", ignoreCase = true)
-        val effectiveRemote = if (isAmir && (isCloudflareDns || !isTcpCapableScheme)) {
+        val effectiveRemote = if (isAmir && !isTcpCapableScheme) {
             "https://8.8.8.8/dns-query"
         } else {
             configuredRemote
@@ -699,8 +696,16 @@ object XrayConfigBuilder {
                 .put("outboundTag", "proxy")
         )
 
+        val effectiveDomainStrategy = if (isAmir && settings.fakeDnsEnabled) {
+            // FakeDNS already assigns synthetic IPs and sniffs back to domain; avoid blocking every
+            // outbound connection on a synchronous Router DNS lookup via IPIfNonMatch.
+            "AsIs"
+        } else {
+            settings.domainStrategy.ifBlank { "IPIfNonMatch" }
+        }
+
         return JSONObject()
-            .put("domainStrategy", settings.domainStrategy.ifBlank { "IPIfNonMatch" })
+            .put("domainStrategy", effectiveDomainStrategy)
             .put("rules", rules)
     }
 }

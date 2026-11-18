@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/palang_icon_fg_1794999354777"
+        android:drawable="@drawable/palang_minimal_icon_1795003260717"
         android:gravity="center" />
 </layer-list>

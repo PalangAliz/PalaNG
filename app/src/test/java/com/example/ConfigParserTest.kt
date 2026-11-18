@@ -111,14 +111,16 @@ class ConfigParserTest {
         assertEquals("UseIPv4", dns.getString("queryStrategy"))
         val dnsServers = dns.getJSONArray("servers")
         assertEquals("fakedns", dnsServers.getString(0))
-        assertEquals("https://8.8.8.8/dns-query", dnsServers.getString(1))
+        assertEquals("https://1.1.1.1/dns-query", dnsServers.getString(1))
 
         val tunSniff = root.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
         assertTrue(tunSniff.getBoolean("enabled"))
         assertEquals(false, tunSniff.getBoolean("routeOnly"))
         assertEquals("fakedns", tunSniff.getJSONArray("destOverride").getString(0))
 
-        val rules = root.getJSONObject("routing").getJSONArray("rules")
+        val routing = root.getJSONObject("routing")
+        assertEquals("AsIs", routing.getString("domainStrategy"))
+        val rules = routing.getJSONArray("rules")
         var hasUdpBlock = false
         for (i in 0 until rules.length()) {
             val r = rules.getJSONObject(i)

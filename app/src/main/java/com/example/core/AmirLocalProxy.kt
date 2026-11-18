@@ -5,18 +5,19 @@ import com.example.data.model.ServerConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Dispatcher
 import okhttp3.Dns
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -28,11 +29,14 @@ import okio.ByteString.Companion.toByteString
 import java.io.EOFException
 import java.io.InputStream
 import java.net.InetAddress
+import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import javax.net.SocketFactory
@@ -42,9 +46,14 @@ class AmirLocalProxy(
     private val protectSocket: (Socket) -> Boolean = { true },
     private val onLog: (String) -> Unit = {}
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Dedicated unbounded IO pool so blocking socket reads never starve Dispatchers.IO (capped at 64 threads)
+    private val proxyExecutor = Executors.newCachedThreadPool()
+    private val proxyDispatcher = proxyExecutor.asCoroutineDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + proxyDispatcher)
+
     private var serverSocket: ServerSocket? = null
-    private var acceptJob: Job? = null
+    private var acceptJob: kotlinx.coroutines.Job? = null
+    private val loggedCleanIpFallback = AtomicBoolean(false)
 
     val localPort: Int
         get() = serverSocket?.localPort ?: 0
@@ -62,7 +71,7 @@ class AmirLocalProxy(
     }
 
     fun start(): Int {
-        val ss = ServerSocket(0, 256, InetAddress.getByName("127.0.0.1"))
+        val ss = ServerSocket(0, 512, InetAddress.getByName("127.0.0.1"))
         serverSocket = ss
         val boundPort = ss.localPort
         onLog("Amir local SOCKS5 listening on 127.0.0.1:$boundPort -> $workerHost" +
@@ -86,6 +95,8 @@ class AmirLocalProxy(
         scope.cancel()
         runCatching { httpClientDirect.dispatcher.executorService.shutdown() }
         runCatching { httpClientCleanIp?.dispatcher?.executorService?.shutdown() }
+        runCatching { proxyDispatcher.close() }
+        runCatching { proxyExecutor.shutdownNow() }
     }
 
     private fun buildOkHttpClient(useCleanIp: Boolean): OkHttpClient {
@@ -101,21 +112,36 @@ class AmirLocalProxy(
                 configure(delegate.createSocket(address, port, localAddress, localPort))
 
             private fun configure(s: Socket): Socket {
-                runCatching { s.tcpNoDelay = true }
+                runCatching {
+                    s.tcpNoDelay = true // also forces SocketImpl FD creation before protect()
+                    s.receiveBufferSize = SOCKET_BUFFER_BYTES
+                    s.sendBufferSize = SOCKET_BUFFER_BYTES
+                }
                 protectSocket(s)
                 return s
             }
         }
 
+        // Disable permessage-deflate compression (matches Cl4.py compression=None):
+        // compressing high-entropy XOR binary frames wastes CPU and adds flush latency.
+        val disableWsCompressionInterceptor = Interceptor { chain ->
+            val req = chain.request().newBuilder()
+                .removeHeader("Sec-WebSocket-Extensions")
+                .build()
+            chain.proceed(req)
+        }
+
         val dispatcher = Dispatcher().apply {
-            maxRequests = 256
-            maxRequestsPerHost = 256
+            maxRequests = 512
+            maxRequestsPerHost = 512
         }
 
         val builder = OkHttpClient.Builder()
             .dispatcher(dispatcher)
+            .proxy(Proxy.NO_PROXY)
             .protocols(listOf(Protocol.HTTP_1_1))
-            .connectTimeout(if (useCleanIp) 8 else 15, TimeUnit.SECONDS)
+            .addInterceptor(disableWsCompressionInterceptor)
+            .connectTimeout(if (useCleanIp) 5 else 10, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
             .pingInterval(0, TimeUnit.SECONDS)
@@ -140,6 +166,10 @@ class AmirLocalProxy(
         try {
             socket.soTimeout = 10_000
             socket.tcpNoDelay = true
+            runCatching {
+                socket.receiveBufferSize = SOCKET_BUFFER_BYTES
+                socket.sendBufferSize = SOCKET_BUFFER_BYTES
+            }
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
 
@@ -155,7 +185,6 @@ class AmirLocalProxy(
             val req = readExact(input, 4)
             if (req[0].toInt() != 5) return
             if (req[1].toInt() != 1) {
-                // Immediately reject UDP Associate / Bind with Command Not Supported (0x07)
                 runCatching {
                     output.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
                     output.flush()
@@ -210,24 +239,30 @@ class AmirLocalProxy(
             output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             output.flush()
 
-            // 7. Bidirectional XOR-encrypted relay (wait for both upload and download)
+            // 7. Bidirectional XOR-encrypted relay
             coroutineScope {
                 val upJob = launch {
                     val buf = ByteArray(MAX_CHUNK)
+                    var hadError = false
                     try {
                         while (isActive) {
                             val read = input.read(buf)
                             if (read <= 0) break
-                            val chunk = buf.copyOfRange(0, read)
-                            val encrypted = xorBytes(chunk, key)
+                            val encrypted = xorBytesSlice(buf, read, key)
                             while (wsConn.webSocket.queueSize() > BUFFER_MAX && isActive) {
-                                kotlinx.coroutines.delay(5)
+                                delay(2)
                             }
-                            if (!wsConn.webSocket.send(encrypted.toByteString())) break
+                            if (!wsConn.webSocket.send(encrypted.toByteString())) {
+                                hadError = true
+                                break
+                            }
                         }
                     } catch (_: Exception) {
+                        hadError = true
                     } finally {
-                        runCatching { wsConn.webSocket.close(1000, "eof") }
+                        if (hadError) {
+                            runCatching { wsConn.webSocket.close(1000, "err") }
+                        }
                     }
                 }
 
@@ -266,13 +301,16 @@ class AmirLocalProxy(
     private suspend fun openWebSocket(): WsConnection? {
         val cleanClient = httpClientCleanIp
         if (cleanClient != null) {
-            val res = runCatching { dialWebSocket(cleanClient, 8_000L) }.getOrNull()
-            if (res != null) return res
+            val cleanAttempt = runCatching { dialWebSocket(cleanClient, 5_000L) }
+            if (cleanAttempt.isSuccess) return cleanAttempt.getOrNull()
+            if (loggedCleanIpFallback.compareAndSet(false, true)) {
+                onLog("Amir CF Clean IP ($cleanIp) dial failed (${cleanAttempt.exceptionOrNull()?.message}), falling back to direct host")
+            }
         }
-        return runCatching { dialWebSocket(httpClientDirect, 12_000L) }.getOrNull()
+        return runCatching { dialWebSocket(httpClientDirect, 10_000L) }.getOrNull()
     }
 
-    private suspend fun dialWebSocket(client: OkHttpClient, timeoutMs: Long = 12_000L): WsConnection {
+    private suspend fun dialWebSocket(client: OkHttpClient, timeoutMs: Long = 10_000L): WsConnection {
         val httpUrl = when {
             workerUrl.startsWith("wss://", ignoreCase = true) -> "https://" + workerUrl.substring(6)
             workerUrl.startsWith("ws://", ignoreCase = true) -> "http://" + workerUrl.substring(5)
@@ -365,7 +403,8 @@ class AmirLocalProxy(
 
     companion object {
         private const val SUBPROTO = "chat.v2"
-        private const val MAX_CHUNK = 16384
+        private const val MAX_CHUNK = 32768
+        private const val SOCKET_BUFFER_BYTES = 131072
         private const val BUFFER_MAX = 1_048_576L
         private val random = SecureRandom()
 
@@ -435,6 +474,15 @@ class AmirLocalProxy(
             val out = ByteArray(data.size)
             val kLen = key.size
             for (i in data.indices) {
+                out[i] = (data[i].toInt() xor key[i % kLen].toInt()).toByte()
+            }
+            return out
+        }
+
+        fun xorBytesSlice(data: ByteArray, length: Int, key: ByteArray): ByteArray {
+            val out = ByteArray(length)
+            val kLen = key.size
+            for (i in 0 until length) {
                 out[i] = (data[i].toInt() xor key[i % kLen].toInt()).toByte()
             }
             return out

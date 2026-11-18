@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -62,11 +63,11 @@ fun AboutScreen(
         ) {
             Spacer(modifier = Modifier.height(12.dp))
             Image(
-                painter = painterResource(id = R.drawable.palang_icon_fg_1794999354777),
+                painter = painterResource(id = R.drawable.palang_minimal_icon_1795003260717),
                 contentDescription = "PalaNG Icon",
                 modifier = Modifier
-                    .size(96.dp)
-                    .clip(RoundedCornerShape(24.dp))
+                    .size(88.dp)
+                    .clip(RoundedCornerShape(20.dp))
             )
             Text(
                 text = stringResource(R.string.app_name),
@@ -80,8 +81,9 @@ fun AboutScreen(
             )
 
             Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
