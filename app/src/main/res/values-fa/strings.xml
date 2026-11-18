@@ -1,0 +1,43 @@
+<resources>
+    <string name="app_name">XrayNG</string>
+    <string name="nav_profiles">پروفایل‌ها</string>
+    <string name="nav_subscriptions">تنظیمات اشتراک</string>
+    <string name="nav_routing">تنظیمات مسیریابی</string>
+    <string name="nav_per_app">پراکسی برنامه‌ها</string>
+    <string name="nav_settings">تنظیمات</string>
+    <string name="nav_logs">گزارش‌ها</string>
+    <string name="nav_assets">فایل‌های GeoIP و Geosite</string>
+    <string name="nav_about">درباره</string>
+
+    <string name="status_not_connected">متصل نیست</string>
+    <string name="status_connecting">در حال اتصال…</string>
+    <string name="status_connected">متصل شد</string>
+    <string name="status_disconnecting">در حال قطع اتصال…</string>
+    <string name="tap_to_test">متصل، برای تست اتصال لمس کنید</string>
+
+    <string name="action_add">افزودن کانفیگ</string>
+    <string name="action_import_clipboard">وارد کردن از کلیپ‌بورد</string>
+    <string name="action_scan_qr">اسکن کد QR</string>
+    <string name="action_import_custom">وارد کردن JSON سفارشی</string>
+    <string name="action_manual_vmess">افزودن دستی [VMess]</string>
+    <string name="action_manual_vless">افزودن دستی [VLESS]</string>
+    <string name="action_manual_trojan">افزودن دستی [Trojan]</string>
+    <string name="action_manual_ss">افزودن دستی [Shadowsocks]</string>
+    <string name="action_manual_socks">افزودن دستی [SOCKS]</string>
+    <string name="action_manual_wg">افزودن دستی [WireGuard]</string>
+    <string name="action_manual_hy2">افزودن دستی [Hysteria2]</string>
+    <string name="action_manual_amir">افزودن دستی [Amir]</string>
+
+    <string name="menu_real_delay_all">تست پینگ واقعی همه</string>
+    <string name="menu_sort_delay">مرتب‌سازی بر اساس پینگ</string>
+    <string name="menu_remove_duplicates">حذف کانفیگ‌های تکراری</string>
+    <string name="menu_remove_invalid">حذف کانفیگ‌های نامعتبر</string>
+    <string name="menu_update_subs">به‌روزرسانی اشتراک</string>
+    <string name="menu_export_all">خروجی همه به کلیپ‌بورد</string>
+    <string name="menu_delete_all">حذف همه کانفیگ‌های گروه</string>
+
+    <string name="group_all">همه</string>
+    <string name="group_default">پیش‌فرض</string>
+    <string name="empty_profiles_title">هیچ پروفایلی وجود ندارد</string>
+    <string name="empty_profiles_hint">برای وارد کردن از کلیپ‌بورد، اسکن QR یا افزودن دستی، دکمه + را بزنید.</string>
+</resources>
