@@ -36,9 +36,11 @@ import androidx.compose.material.icons.outlined.AltRoute
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -104,6 +106,7 @@ import com.example.R
 import com.example.data.model.AppSettings
 import com.example.data.model.ProtocolType
 import com.example.data.model.ServerConfig
+import com.example.data.model.ThemeMode
 import com.example.service.ConnectionState
 import com.example.service.XrayVpnService
 import com.example.ui.MainViewModel
@@ -209,8 +212,8 @@ fun HomeScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Image(
-                            painter = painterResource(id = R.drawable.xrayng_icon_fg_1794979785863),
-                            contentDescription = "XrayNG logo",
+                            painter = painterResource(id = R.drawable.palang_icon_fg_1794999354777),
+                            contentDescription = "PalaNG logo",
                             modifier = Modifier
                                 .size(52.dp)
                                 .clip(RoundedCornerShape(14.dp))
@@ -223,9 +226,10 @@ fun HomeScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = viewModel.getCoreVersion(),
+                                text = stringResource(R.string.brand_subtitle),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -329,6 +333,7 @@ fun HomeScreen(
         }
     ) {
         Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
@@ -349,16 +354,31 @@ fun HomeScreen(
                             Text(
                                 text = stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
                             Text(
-                                text = if (uiState.settings.vpnMode) "VPN • ${uiState.settings.routingMode.label}" else "Proxy Only • :${uiState.settings.socksPort}",
+                                text = stringResource(R.string.brand_subtitle),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                     },
                     actions = {
+                        val isDark = uiState.settings.themeMode == ThemeMode.DARK
+                        IconButton(
+                            onClick = {
+                                val next = if (isDark) ThemeMode.LIGHT else ThemeMode.DARK
+                                viewModel.updateSettings { it.copy(themeMode = next) }
+                            },
+                            modifier = Modifier.testTag("theme_toggle_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                                contentDescription = stringResource(R.string.settings_theme)
+                            )
+                        }
                         IconButton(
                             onClick = {
                                 showSearch = !showSearch
@@ -443,7 +463,7 @@ fun HomeScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            if (uiState.isTestingBatch) "Stop delay test" else stringResource(R.string.menu_real_delay_all)
+                                            if (uiState.isTestingBatch) stringResource(R.string.menu_stop_delay_test) else stringResource(R.string.menu_real_delay_all)
                                         )
                                     },
                                     leadingIcon = { Icon(Icons.Outlined.Speed, null) },
@@ -535,7 +555,7 @@ fun HomeScreen(
                     OutlinedTextField(
                         value = uiState.searchQuery,
                         onValueChange = viewModel::setSearchQuery,
-                        placeholder = { Text("Filter by remarks, host, or protocol") },
+                        placeholder = { Text(stringResource(R.string.search_hint)) },
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Outlined.Search, null) },
                         trailingIcon = {
@@ -909,9 +929,9 @@ private fun VpnBottomControlDock(
                         ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
                         ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
                         ConnectionState.CONNECTED -> when {
-                            isTestingDelay -> "Checking connection…"
-                            lastTestedDelay != null && lastTestedDelay >= 0 -> "Connected • $lastTestedDelay ms"
-                            lastTestedDelay != null && lastTestedDelay < 0 -> "Connected • Test timeout"
+                            isTestingDelay -> stringResource(R.string.checking_connection)
+                            lastTestedDelay != null && lastTestedDelay >= 0 -> stringResource(R.string.connected_delay_ms, lastTestedDelay)
+                            lastTestedDelay != null && lastTestedDelay < 0 -> stringResource(R.string.connected_timeout)
                             else -> stringResource(R.string.tap_to_test)
                         }
                     }
@@ -934,7 +954,7 @@ private fun VpnBottomControlDock(
                     )
                 } else {
                     Text(
-                        text = if (activeRemarks.isNotBlank()) "Selected: $activeRemarks" else "No server selected",
+                        text = if (activeRemarks.isNotBlank()) stringResource(R.string.selected_server, activeRemarks) else stringResource(R.string.no_server_selected),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -988,8 +1008,8 @@ private fun EmptyProfilesState(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Image(
-            painter = painterResource(id = R.drawable.xrayng_icon_fg_1794979785863),
-            contentDescription = null,
+            painter = painterResource(id = R.drawable.palang_icon_fg_1794999354777),
+            contentDescription = "PalaNG logo",
             modifier = Modifier
                 .size(84.dp)
                 .clip(RoundedCornerShape(22.dp))
@@ -1010,17 +1030,17 @@ private fun EmptyProfilesState(
             TextButton(onClick = onImportClipboard, modifier = Modifier.testTag("empty_import_clipboard")) {
                 Icon(Icons.Outlined.ContentPaste, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Clipboard")
+                Text(stringResource(R.string.btn_clipboard))
             }
             TextButton(onClick = onScanQr, modifier = Modifier.testTag("empty_scan_qr")) {
                 Icon(Icons.Outlined.QrCodeScanner, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Scan QR")
+                Text(stringResource(R.string.btn_scan_qr))
             }
             TextButton(onClick = onManualAdd, modifier = Modifier.testTag("empty_add_manual")) {
                 Icon(Icons.Outlined.Add, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Manual")
+                Text(stringResource(R.string.btn_manual))
             }
         }
     }

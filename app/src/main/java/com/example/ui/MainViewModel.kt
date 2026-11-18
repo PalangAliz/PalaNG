@@ -228,7 +228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             val joined = list.joinToString("\n") { ConfigParser.toShareUri(it) }
-            copyToClipboard("XrayNG Configs", joined)
+            copyToClipboard("PalaNG Configs", joined)
             _snackbarEvents.tryEmit("Copied ${list.size} configuration(s) to clipboard")
         }
     }

@@ -26,19 +26,25 @@ object XrayConfigBuilder {
         root.put("policy", buildPolicy())
         root.put("inbounds", buildInbounds(settings))
         root.put("outbounds", buildOutbounds(server, settings, amirLocalPort))
+        val isAmir = server.protocol == ProtocolType.AMIR
         if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
-            root.put("dns", buildDns(settings))
+            root.put("dns", buildDns(settings, isAmir))
         }
-        root.put("routing", buildRouting(settings, customRules))
+        root.put("routing", buildRouting(settings, customRules, isAmir))
         if (settings.fakeDnsEnabled) {
-            root.put(
-                "fakedns",
-                JSONArray().put(
+            val fakeDnsArr = JSONArray().put(
+                JSONObject()
+                    .put("ipPool", "198.18.0.0/15")
+                    .put("poolSize", 65535)
+            )
+            if (settings.preferIpv6) {
+                fakeDnsArr.put(
                     JSONObject()
-                        .put("ipPool", "198.18.0.0/15")
+                        .put("ipPool", "fc00::/18")
                         .put("poolSize", 65535)
                 )
-            )
+            }
+            root.put("fakedns", fakeDnsArr)
         }
         return root.toString(2)
     }
@@ -155,15 +161,15 @@ object XrayConfigBuilder {
 
     private fun buildSniffing(settings: AppSettings): JSONObject {
         val destOverride = JSONArray().apply {
+            if (settings.fakeDnsEnabled) put("fakedns")
             put("http")
             put("tls")
             put("quic")
-            if (settings.fakeDnsEnabled) put("fakedns")
         }
         return JSONObject().apply {
-            put("enabled", settings.sniffingEnabled)
+            put("enabled", settings.sniffingEnabled || settings.fakeDnsEnabled)
             put("destOverride", destOverride)
-            put("routeOnly", settings.routeOnly)
+            put("routeOnly", if (settings.fakeDnsEnabled) false else settings.routeOnly)
         }
     }
 
@@ -531,13 +537,33 @@ object XrayConfigBuilder {
         }
     }
 
-    private fun buildDns(settings: AppSettings): JSONObject {
+    private fun buildDns(settings: AppSettings, isAmir: Boolean = false): JSONObject {
         val servers = JSONArray()
         if (settings.fakeDnsEnabled) {
             servers.put("fakedns")
         }
-        servers.put(settings.remoteDns.ifBlank { "https://1.1.1.1/dns-query" })
-        val domestic = settings.domesticDns.ifBlank { "223.5.5.5" }
+        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://8.8.8.8/dns-query" }
+        // Cloudflare Workers block outbound connect() to Cloudflare's own 1.1.1.1 / 1.0.0.1 IPs,
+        // and Amir's local SOCKS5 tunnel is TCP-only (UDP/QUIC DNS will fail). Ensure TCP/HTTPS DoH.
+        val isCloudflareDns = configuredRemote.contains("1.1.1.1") ||
+            configuredRemote.contains("1.0.0.1") ||
+            configuredRemote.contains("cloudflare-dns.com", ignoreCase = true)
+        val isTcpCapableScheme = configuredRemote.startsWith("https://", ignoreCase = true) ||
+            configuredRemote.startsWith("https+local://", ignoreCase = true) ||
+            configuredRemote.startsWith("tcp://", ignoreCase = true) ||
+            configuredRemote.startsWith("tcp+local://", ignoreCase = true)
+        val effectiveRemote = if (isAmir && (isCloudflareDns || !isTcpCapableScheme)) {
+            "https://8.8.8.8/dns-query"
+        } else {
+            configuredRemote
+        }
+        servers.put(effectiveRemote)
+        val domestic = if (isAmir) {
+            // Avoid plain UDP to external domestic IP through TCP-only Amir; use local direct resolver for domestic rules only.
+            "localhost"
+        } else {
+            settings.domesticDns.ifBlank { "223.5.5.5" }
+        }
         when (settings.routingMode) {
             RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
                 servers.put(
@@ -557,11 +583,16 @@ object XrayConfigBuilder {
             }
             else -> Unit
         }
-        servers.put("localhost")
-        return JSONObject().put("servers", servers)
+        return JSONObject()
+            .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
+            .put("servers", servers)
     }
 
-    private fun buildRouting(settings: AppSettings, customRules: List<RoutingRule>): JSONObject {
+    private fun buildRouting(
+        settings: AppSettings,
+        customRules: List<RoutingRule>,
+        isAmir: Boolean = false
+    ): JSONObject {
         val rules = JSONArray()
 
         // DNS hijack / resolution routing when Local DNS or FakeDNS is enabled
@@ -647,6 +678,17 @@ object XrayConfigBuilder {
                     }
                 }
             }
+        }
+
+        // Amir local SOCKS5 tunnel is TCP-only; block non-DNS UDP (e.g. QUIC/UDP-443) so browsers
+        // and messaging apps immediately fall back to TCP without stalling on UDP timeouts.
+        if (isAmir) {
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("network", "udp")
+                    .put("outboundTag", "block")
+            )
         }
 
         // Default fallback rule to proxy

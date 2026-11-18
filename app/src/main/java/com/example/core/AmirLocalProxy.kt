@@ -15,8 +15,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Dispatcher
 import okhttp3.Dns
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -51,7 +53,7 @@ class AmirLocalProxy(
         serverConfig.extraParam1.ifBlank { serverConfig.address }
     )
     private val workerHost: String = Uri.parse(workerUrl).host.orEmpty().ifBlank { serverConfig.address }
-    private val cleanIp: String = serverConfig.extraParam2.trim()
+    private val cleanIp: String = serverConfig.extraParam2.trim().removePrefix("[").removeSuffix("]")
     private val uuidBytes: ByteArray = serverConfig.passwordOrId.trim().toByteArray(StandardCharsets.UTF_8)
 
     private val httpClientDirect: OkHttpClient by lazy { buildOkHttpClient(useCleanIp = false) }
@@ -60,7 +62,7 @@ class AmirLocalProxy(
     }
 
     fun start(): Int {
-        val ss = ServerSocket(0, 128, InetAddress.getByName("127.0.0.1"))
+        val ss = ServerSocket(0, 256, InetAddress.getByName("127.0.0.1"))
         serverSocket = ss
         val boundPort = ss.localPort
         onLog("Amir local SOCKS5 listening on 127.0.0.1:$boundPort -> $workerHost" +
@@ -105,10 +107,19 @@ class AmirLocalProxy(
             }
         }
 
+        val dispatcher = Dispatcher().apply {
+            maxRequests = 256
+            maxRequestsPerHost = 256
+        }
+
         val builder = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
+            .dispatcher(dispatcher)
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectTimeout(if (useCleanIp) 8 else 15, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
+            .pingInterval(0, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .socketFactory(customSocketFactory)
 
         if (useCleanIp && cleanIp.isNotBlank()) {
@@ -142,7 +153,15 @@ class AmirLocalProxy(
 
             // 2. SOCKS5 Connect Request
             val req = readExact(input, 4)
-            if (req[0].toInt() != 5 || req[1].toInt() != 1) return
+            if (req[0].toInt() != 5) return
+            if (req[1].toInt() != 1) {
+                // Immediately reject UDP Associate / Bind with Command Not Supported (0x07)
+                runCatching {
+                    output.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    output.flush()
+                }
+                return
+            }
             val atyp = req[3].toInt() and 0xFF
             val targetHost = when (atyp) {
                 1 -> {
@@ -164,7 +183,14 @@ class AmirLocalProxy(
             socket.soTimeout = 0
 
             // 3. Connect WebSocket to Cloudflare Worker (try Clean IP first, fallback to direct)
-            val wsConn = openWebSocket() ?: return
+            val wsConn = openWebSocket()
+            if (wsConn == null) {
+                runCatching {
+                    output.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    output.flush()
+                }
+                return
+            }
             ws = wsConn.webSocket
 
             // 4. Send Amir init packet
@@ -184,7 +210,7 @@ class AmirLocalProxy(
             output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             output.flush()
 
-            // 7. Bidirectional XOR-encrypted relay
+            // 7. Bidirectional XOR-encrypted relay (wait for both upload and download)
             coroutineScope {
                 val upJob = launch {
                     val buf = ByteArray(MAX_CHUNK)
@@ -194,9 +220,8 @@ class AmirLocalProxy(
                             if (read <= 0) break
                             val chunk = buf.copyOfRange(0, read)
                             val encrypted = xorBytes(chunk, key)
-                            // Simple backpressure if WS send queue grows too large
                             while (wsConn.webSocket.queueSize() > BUFFER_MAX && isActive) {
-                                kotlinx.coroutines.delay(10)
+                                kotlinx.coroutines.delay(5)
                             }
                             if (!wsConn.webSocket.send(encrypted.toByteString())) break
                         }
@@ -212,11 +237,9 @@ class AmirLocalProxy(
                             if (msg.isNotEmpty()) {
                                 val decrypted = xorBytes(msg, key)
                                 output.write(decrypted)
-                                if (wsConn.incoming.isEmpty) {
-                                    output.flush()
-                                }
                             }
                         }
+                        output.flush()
                     } catch (_: Exception) {
                     } finally {
                         runCatching { socket.close() }
@@ -224,7 +247,7 @@ class AmirLocalProxy(
                 }
 
                 upJob.join()
-                downJob.cancel()
+                downJob.join()
             }
         } catch (ce: CancellationException) {
             throw ce
@@ -243,13 +266,13 @@ class AmirLocalProxy(
     private suspend fun openWebSocket(): WsConnection? {
         val cleanClient = httpClientCleanIp
         if (cleanClient != null) {
-            val res = runCatching { dialWebSocket(cleanClient) }.getOrNull()
+            val res = runCatching { dialWebSocket(cleanClient, 8_000L) }.getOrNull()
             if (res != null) return res
         }
-        return runCatching { dialWebSocket(httpClientDirect) }.getOrNull()
+        return runCatching { dialWebSocket(httpClientDirect, 12_000L) }.getOrNull()
     }
 
-    private suspend fun dialWebSocket(client: OkHttpClient): WsConnection {
+    private suspend fun dialWebSocket(client: OkHttpClient, timeoutMs: Long = 12_000L): WsConnection {
         val httpUrl = when {
             workerUrl.startsWith("wss://", ignoreCase = true) -> "https://" + workerUrl.substring(6)
             workerUrl.startsWith("ws://", ignoreCase = true) -> "http://" + workerUrl.substring(5)
@@ -262,7 +285,7 @@ class AmirLocalProxy(
             .build()
 
         val opened = CompletableDeferred<Unit>()
-        val incoming = Channel<ByteArray>(capacity = 128)
+        val incoming = Channel<ByteArray>(capacity = Channel.UNLIMITED)
 
         val ws = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -291,7 +314,7 @@ class AmirLocalProxy(
         })
 
         try {
-            withTimeout(15_000L) {
+            withTimeout(timeoutMs) {
                 opened.await()
             }
             return WsConnection(ws, incoming)

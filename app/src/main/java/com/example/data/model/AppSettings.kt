@@ -50,7 +50,7 @@ data class AppSettings(
     val perAppBypassMode: Boolean = true,
     val perAppPackages: Set<String> = emptySet(),
     val logLevel: String = "warning",
-    val themeMode: ThemeMode = ThemeMode.DARK,
+    val themeMode: ThemeMode = ThemeMode.LIGHT,
     val languageMode: LanguageMode = LanguageMode.SYSTEM
 ) {
     companion object {

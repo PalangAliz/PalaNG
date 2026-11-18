@@ -2,22 +2,32 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Primary brand palette: Deep Obsidian Navy + Electric Cyan & Emerald
-val CyanPrimary = Color(0xFF00D2E8)
-val CyanPrimaryDark = Color(0xFF0097A7)
+// PalaNG Visual Identity: Crisp White + Pumpkin Orange / Golden Amber
+val PumpkinPrimary = Color(0xFFFF7A00)
+val PumpkinPrimaryDark = Color(0xFFE65100)
+val PumpkinLightAccent = Color(0xFFFF9824)
+val PumpkinGold = Color(0xFFFFA726)
+val PumpkinContainerLight = Color(0xFFFFE6CC)
+val PumpkinContainerDark = Color(0xFF4B2400)
+
+val CyanPrimary = Color(0xFFFF7A00)
+val CyanPrimaryDark = Color(0xFFE65100)
 val EmeraldConnected = Color(0xFF10B981)
 val EmeraldContainerDark = Color(0xFF064E3B)
 val EmeraldContainerLight = Color(0xFFD1FAE5)
 
-val SlateNavy950 = Color(0xFF0B1120)
-val SlateNavy900 = Color(0xFF0F172A)
-val SlateNavy850 = Color(0xFF151F33)
-val SlateNavy800 = Color(0xFF1E293B)
-val SlateNavy700 = Color(0xFF334155)
+// Dark theme charcoal surfaces
+val Obsidian950 = Color(0xFF0D0D10)
+val Obsidian900 = Color(0xFF141418)
+val Obsidian850 = Color(0xFF1B1A1E)
+val Obsidian800 = Color(0xFF242126)
+val Obsidian700 = Color(0xFF332E33)
 
-val SurfaceLight = Color(0xFFF6F8FC)
-val SurfaceCardLight = Color(0xFFFFFFFF)
-val SurfaceVariantLight = Color(0xFFE9EFF6)
+// Light theme pure white + warm tint surfaces
+val SurfaceWhite = Color(0xFFFFFFFF)
+val SurfaceWarmWhite = Color(0xFFFFFAF4)
+val SurfaceCardWarm = Color(0xFFFFF6EC)
+val SurfaceVariantWarm = Color(0xFFFFECD6)
 
 val AmberLatency = Color(0xFFF59E0B)
 val CoralError = Color(0xFFEF4444)

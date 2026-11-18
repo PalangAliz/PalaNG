@@ -100,7 +100,7 @@ class SettingsDataStore(private val context: Context) {
             logLevel = prefs[Keys.LOG_LEVEL] ?: "warning",
             themeMode = prefs[Keys.THEME_MODE]?.let { name ->
                 ThemeMode.entries.firstOrNull { it.name == name }
-            } ?: ThemeMode.DARK,
+            } ?: ThemeMode.LIGHT,
             languageMode = prefs[Keys.LANGUAGE_MODE]?.let { name ->
                 LanguageMode.entries.firstOrNull { it.name == name }
             } ?: LanguageMode.SYSTEM

@@ -36,9 +36,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.R
 import com.example.data.model.LanguageMode
 import com.example.data.model.ThemeMode
 import com.example.ui.MainViewModel
@@ -69,10 +71,21 @@ fun SettingsScreen(
         )
     }
 
+    val themeLabels = mapOf(
+        ThemeMode.LIGHT.name to stringResource(R.string.theme_light),
+        ThemeMode.DARK.name to stringResource(R.string.theme_dark),
+        ThemeMode.SYSTEM.name to stringResource(R.string.theme_system)
+    )
+    val languageLabels = mapOf(
+        LanguageMode.SYSTEM.name to stringResource(R.string.lang_system),
+        LanguageMode.EN.name to stringResource(R.string.lang_en),
+        LanguageMode.FA.name to stringResource(R.string.lang_fa)
+    )
+
     if (showLogLevelDialog) {
         ChoiceDialog(
             title = "Core Log Level",
-            options = listOf("debug", "info", "warning", "error", "none"),
+            options = listOf("debug", "info", "warning", "error", "none").map { it to it },
             selected = settings.logLevel,
             onSelect = { lvl ->
                 viewModel.updateSettings { it.copy(logLevel = lvl) }
@@ -84,8 +97,8 @@ fun SettingsScreen(
 
     if (showThemeDialog) {
         ChoiceDialog(
-            title = "Appearance Theme",
-            options = ThemeMode.entries.map { it.name },
+            title = stringResource(R.string.settings_theme),
+            options = ThemeMode.entries.map { it.name to (themeLabels[it.name] ?: it.name) },
             selected = settings.themeMode.name,
             onSelect = { name ->
                 viewModel.updateSettings { it.copy(themeMode = ThemeMode.valueOf(name)) }
@@ -97,8 +110,8 @@ fun SettingsScreen(
 
     if (showLanguageDialog) {
         ChoiceDialog(
-            title = "App Language",
-            options = LanguageMode.entries.map { it.name },
+            title = stringResource(R.string.settings_language),
+            options = LanguageMode.entries.map { it.name to (languageLabels[it.name] ?: it.name) },
             selected = settings.languageMode.name,
             onSelect = { name ->
                 viewModel.updateSettings { it.copy(languageMode = LanguageMode.valueOf(name)) }
@@ -116,7 +129,7 @@ fun SettingsScreen(
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                     }
                 },
-                title = { Text("Settings") }
+                title = { Text(stringResource(R.string.settings_title)) }
             )
         }
     ) { innerPadding ->
@@ -126,7 +139,7 @@ fun SettingsScreen(
                 .padding(innerPadding),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
-            item { SectionHeader("Core & VPN Mode") }
+            item { SectionHeader(stringResource(R.string.settings_section_core)) }
             item {
                 SwitchRow(
                     title = "VPN Mode (TUN)",
@@ -187,7 +200,7 @@ fun SettingsScreen(
             }
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
-            item { SectionHeader("Traffic Sniffing & DNS") }
+            item { SectionHeader(stringResource(R.string.settings_section_dns)) }
             item {
                 SwitchRow(
                     title = "Enable Sniffing",
@@ -267,7 +280,7 @@ fun SettingsScreen(
             }
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
-            item { SectionHeader("Mux & TLS Fragment") }
+            item { SectionHeader(stringResource(R.string.settings_section_mux)) }
             item {
                 SwitchRow(
                     title = "Enable Mux",
@@ -336,7 +349,7 @@ fun SettingsScreen(
             }
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
-            item { SectionHeader("General & Diagnostics") }
+            item { SectionHeader(stringResource(R.string.settings_section_general)) }
             item {
                 ValueRow(
                     title = "Core Log Level",
@@ -346,15 +359,15 @@ fun SettingsScreen(
             }
             item {
                 ValueRow(
-                    title = "Theme",
-                    value = settings.themeMode.name,
+                    title = stringResource(R.string.settings_theme),
+                    value = themeLabels[settings.themeMode.name] ?: settings.themeMode.name,
                     onClick = { showThemeDialog = true }
                 )
             }
             item {
                 ValueRow(
-                    title = "Language",
-                    value = settings.languageMode.name,
+                    title = stringResource(R.string.settings_language),
+                    value = languageLabels[settings.languageMode.name] ?: settings.languageMode.name,
                     onClick = { showLanguageDialog = true }
                 )
             }
@@ -464,7 +477,7 @@ private fun TextSettingDialog(
 @Composable
 private fun ChoiceDialog(
     title: String,
-    options: List<String>,
+    options: List<Pair<String, String>>,
     selected: String,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit
@@ -474,16 +487,16 @@ private fun ChoiceDialog(
         title = { Text(title) },
         text = {
             Column {
-                options.forEach { option ->
+                options.forEach { (key, label) ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onSelect(option) }
+                            .clickable { onSelect(key) }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
-                        Text(text = option, style = MaterialTheme.typography.bodyLarge)
+                        RadioButton(selected = key == selected, onClick = { onSelect(key) })
+                        Text(text = label, style = MaterialTheme.typography.bodyLarge)
                     }
                 }
             }

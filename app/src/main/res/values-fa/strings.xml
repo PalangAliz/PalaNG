@@ -1,5 +1,7 @@
 <resources>
-    <string name="app_name">XrayNG</string>
+    <string name="app_name">PalaNG</string>
+    <string name="brand_subtitle">ALAAN</string>
+
     <string name="nav_profiles">پروفایل‌ها</string>
     <string name="nav_subscriptions">تنظیمات اشتراک</string>
     <string name="nav_routing">تنظیمات مسیریابی</string>
@@ -14,6 +16,11 @@
     <string name="status_connected">متصل شد</string>
     <string name="status_disconnecting">در حال قطع اتصال…</string>
     <string name="tap_to_test">متصل، برای تست اتصال لمس کنید</string>
+    <string name="checking_connection">در حال بررسی اتصال…</string>
+    <string name="connected_delay_ms">متصل • %1$d ms</string>
+    <string name="connected_timeout">متصل • خطا در تست اتصال</string>
+    <string name="selected_server">انتخاب‌شده: %1$s</string>
+    <string name="no_server_selected">سروری انتخاب نشده است</string>
 
     <string name="action_add">افزودن کانفیگ</string>
     <string name="action_import_clipboard">وارد کردن از کلیپ‌بورد</string>
@@ -29,6 +36,7 @@
     <string name="action_manual_amir">افزودن دستی [Amir]</string>
 
     <string name="menu_real_delay_all">تست پینگ واقعی همه</string>
+    <string name="menu_stop_delay_test">توقف تست پینگ</string>
     <string name="menu_sort_delay">مرتب‌سازی بر اساس پینگ</string>
     <string name="menu_remove_duplicates">حذف کانفیگ‌های تکراری</string>
     <string name="menu_remove_invalid">حذف کانفیگ‌های نامعتبر</string>
@@ -40,4 +48,23 @@
     <string name="group_default">پیش‌فرض</string>
     <string name="empty_profiles_title">هیچ پروفایلی وجود ندارد</string>
     <string name="empty_profiles_hint">برای وارد کردن از کلیپ‌بورد، اسکن QR یا افزودن دستی، دکمه + را بزنید.</string>
+    <string name="btn_clipboard">کلیپ‌بورد</string>
+    <string name="btn_scan_qr">اسکن QR</string>
+    <string name="btn_manual">دستی</string>
+    <string name="search_hint">جستجو بر اساس نام، آدرس یا پروتکل</string>
+
+    <string name="settings_title">تنظیمات</string>
+    <string name="settings_section_core">هسته و حالت VPN</string>
+    <string name="settings_section_dns">تشخیص ترافیک و DNS</string>
+    <string name="settings_section_mux">Mux و Fragment</string>
+    <string name="settings_section_general">ظاهر و زبان</string>
+    <string name="settings_theme">تم برنامه</string>
+    <string name="settings_language">زبان برنامه</string>
+    <string name="theme_light">روشن (سفید)</string>
+    <string name="theme_dark">تاریک</string>
+    <string name="theme_system">مطابق سیستم</string>
+    <string name="lang_system">مطابق سیستم</string>
+    <string name="lang_en">English</string>
+    <string name="lang_fa">فارسی</string>
+    <string name="about_title">درباره برنامه</string>
 </resources>

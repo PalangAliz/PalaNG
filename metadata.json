@@ -1,6 +1,6 @@
 {
-  "name": "XrayNG",
-  "description": "Full-featured Xray/V2Ray VPN client for Android supporting VMess, VLESS, Trojan, Shadowsocks, WireGuard, Hysteria2, subscriptions, QR scanning, routing rules, and per-app proxy.",
+  "name": "PalaNG",
+  "description": "PalaNG — high-speed Xray/V2Ray VPN client for Android with Amir, VLESS, VMess, Trojan, Shadowsocks, WireGuard, and Hysteria2 support.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

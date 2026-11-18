@@ -44,7 +44,7 @@ class XrayVpnService : VpnService() {
     private var coreController: CoreController? = null
     private var amirLocalProxy: AmirLocalProxy? = null
     private var trafficJob: Job? = null
-    private var currentServerRemarks: String = "XrayNG"
+    private var currentServerRemarks: String = "PalaNG"
 
     override fun onCreate() {
         super.onCreate()
@@ -244,11 +244,11 @@ class XrayVpnService : VpnService() {
 
     private fun buildTunInterface(sessionName: String, settings: AppSettings): ParcelFileDescriptor? {
         val builder = Builder()
-            .setSession(sessionName.ifBlank { "XrayNG" })
+            .setSession(sessionName.ifBlank { "PalaNG" })
             .setMtu(1500)
             .addAddress("10.0.0.2", 30)
-            .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
+            .addDnsServer("8.8.4.4")
 
         if (settings.preferIpv6) {
             builder.addAddress("fd00:10:0:0::2", 126)
@@ -412,7 +412,7 @@ class XrayVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "XrayNG VPN Status",
+                "PalaNG VPN Status",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Active Xray VPN connection status and live speed"

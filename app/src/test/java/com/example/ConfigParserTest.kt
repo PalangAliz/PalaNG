@@ -94,13 +94,40 @@ class ConfigParserTest {
 
         val jsonStr = XrayConfigBuilder.buildFullConfig(
             server = parsed,
-            settings = AppSettings(vpnMode = true, localDnsEnabled = true, fakeDnsEnabled = true),
+            settings = AppSettings(
+                vpnMode = true,
+                localDnsEnabled = true,
+                fakeDnsEnabled = true,
+                routeOnly = true,
+                remoteDns = "https://1.1.1.1/dns-query"
+            ),
             customRules = emptyList(),
             amirLocalPort = 40446
         )
         val root = JSONObject(jsonStr)
         assertTrue(root.has("dns"))
         assertTrue(root.has("fakedns"))
+        val dns = root.getJSONObject("dns")
+        assertEquals("UseIPv4", dns.getString("queryStrategy"))
+        val dnsServers = dns.getJSONArray("servers")
+        assertEquals("fakedns", dnsServers.getString(0))
+        assertEquals("https://8.8.8.8/dns-query", dnsServers.getString(1))
+
+        val tunSniff = root.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
+        assertTrue(tunSniff.getBoolean("enabled"))
+        assertEquals(false, tunSniff.getBoolean("routeOnly"))
+        assertEquals("fakedns", tunSniff.getJSONArray("destOverride").getString(0))
+
+        val rules = root.getJSONObject("routing").getJSONArray("rules")
+        var hasUdpBlock = false
+        for (i in 0 until rules.length()) {
+            val r = rules.getJSONObject(i)
+            if (r.optString("network") == "udp" && r.optString("outboundTag") == "block") {
+                hasUdpBlock = true
+            }
+        }
+        assertTrue(hasUdpBlock)
+
         val proxyOutbound = root.getJSONArray("outbounds").getJSONObject(0)
         assertEquals("socks", proxyOutbound.getString("protocol"))
         assertEquals(40446, proxyOutbound.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getInt("port"))

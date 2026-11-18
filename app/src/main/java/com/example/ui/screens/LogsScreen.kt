@@ -68,7 +68,7 @@ fun LogsScreen(
                     IconButton(
                         onClick = {
                             val text = logs.joinToString("\n") { "[${it.timestamp}] ${it.message}" }
-                            viewModel.copyToClipboard("XrayNG Logs", text)
+                            viewModel.copyToClipboard("PalaNG Logs", text)
                             scope.launch { snackbarHostState.showSnackbar("Copied ${logs.size} log lines") }
                         }
                     ) {

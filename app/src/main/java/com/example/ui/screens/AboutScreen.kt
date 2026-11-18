@@ -48,7 +48,7 @@ fun AboutScreen(
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                     }
                 },
-                title = { Text("About") }
+                title = { Text(stringResource(R.string.about_title)) }
             )
         }
     ) { innerPadding ->
@@ -62,8 +62,8 @@ fun AboutScreen(
         ) {
             Spacer(modifier = Modifier.height(12.dp))
             Image(
-                painter = painterResource(id = R.drawable.xrayng_icon_fg_1794979785863),
-                contentDescription = "XrayNG Icon",
+                painter = painterResource(id = R.drawable.palang_icon_fg_1794999354777),
+                contentDescription = "PalaNG Icon",
                 modifier = Modifier
                     .size(96.dp)
                     .clip(RoundedCornerShape(24.dp))
