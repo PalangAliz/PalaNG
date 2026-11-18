@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -45,9 +47,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.R
 import com.example.data.model.RoutingMode
 import com.example.data.model.RoutingRule
 import com.example.ui.MainViewModel
@@ -56,11 +60,17 @@ import com.example.ui.MainViewModel
 @Composable
 fun RoutingSettingsScreen(
     viewModel: MainViewModel,
+    onApplyReconnect: () -> Unit = {},
     onBack: () -> Unit
 ) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle()
     val rules by viewModel.routingRulesFlow.collectAsStateWithLifecycle()
+    val pendingTunnelRestart by viewModel.pendingTunnelRestart.collectAsStateWithLifecycle()
     var showRuleDialog by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = !showRuleDialog) {
+        onBack()
+    }
 
     if (showRuleDialog) {
         AddRoutingRuleDialog(
@@ -94,13 +104,50 @@ fun RoutingSettingsScreen(
             }
         }
     ) { innerPadding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(innerPadding)
         ) {
+            AnimatedVisibility(visible = pendingTunnelRestart) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.pending_reconnect_banner),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                        )
+                        TextButton(
+                            onClick = onApplyReconnect,
+                            modifier = Modifier.testTag("routing_apply_reconnect_button")
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_apply_now),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
             item {
                 Text(
                     text = "Routing Mode",
@@ -237,6 +284,7 @@ fun RoutingSettingsScreen(
                 }
             }
             item { Spacer(modifier = Modifier.height(64.dp)) }
+        }
         }
     }
 }

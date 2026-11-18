@@ -85,6 +85,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
+    private val _pendingTunnelRestart = MutableStateFlow(false)
+    val pendingTunnelRestart: StateFlow<Boolean> = _pendingTunnelRestart.asStateFlow()
+
     val settingsFlow: StateFlow<AppSettings> = repository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
 
@@ -163,6 +166,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshAssetInfos()
+        viewModelScope.launch {
+            val s = repository.getSettingsSnapshot()
+            if (s.preAmirLocalDnsEnabled != null || s.preAmirFakeDnsEnabled != null) {
+                repository.updateSettings { cur ->
+                    cur.copy(preAmirLocalDnsEnabled = null, preAmirFakeDnsEnabled = null)
+                }
+            }
+        }
     }
 
     fun setSearchQuery(query: String) {
@@ -181,6 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (VpnStateHolder.connectionState.value == ConnectionState.CONNECTED &&
                 VpnStateHolder.activeServerId.value != serverId
             ) {
+                _pendingTunnelRestart.value = false
                 XrayVpnService.start(app, serverId)
             }
         }
@@ -189,8 +201,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleVpnConnection() {
         val state = VpnStateHolder.connectionState.value
         if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) {
+            _pendingTunnelRestart.value = false
             XrayVpnService.stop(app)
         } else {
+            _pendingTunnelRestart.value = false
             viewModelScope.launch {
                 val selectedId = repository.getSettingsSnapshot().selectedServerId
                 val target = if (selectedId.isNotBlank()) {
@@ -208,6 +222,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    fun applyPendingTunnelRestartIfNeeded() {
+        if (!_pendingTunnelRestart.value) return
+        _pendingTunnelRestart.value = false
+        val state = VpnStateHolder.connectionState.value
+        if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) {
+            viewModelScope.launch {
+                val activeId = VpnStateHolder.activeServerId.value.ifBlank {
+                    repository.getSettingsSnapshot().selectedServerId
+                }
+                if (activeId.isNotBlank()) {
+                    XrayVpnService.start(app, activeId)
+                    _snackbarEvents.tryEmit("Reconnecting with updated settings…")
+                }
+            }
+        }
+    }
+
+    private fun isTunnelActive(): Boolean {
+        val state = VpnStateHolder.connectionState.value
+        return state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING
     }
 
     fun measureConnectedDelay() {
@@ -353,6 +389,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.saveServer(config)
             _snackbarEvents.tryEmit("Saved ${config.remarks}")
+            if (isTunnelActive() && VpnStateHolder.activeServerId.value == config.id) {
+                _pendingTunnelRestart.value = false
+                XrayVpnService.start(app, config.id)
+                _snackbarEvents.tryEmit("Reconnecting ${config.remarks}…")
+            }
         }
     }
 
@@ -404,7 +445,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun measureServerDelayInternal(server: ServerConfig, settings: AppSettings): Long {
         return if (server.protocol == ProtocolType.AMIR) {
-            AmirLocalProxy(server).measureDelay(settings.delayTestUrl)
+            AmirLocalProxy(serverConfig = server, settings = settings).measureDelay(settings.delayTestUrl)
         } else {
             val configJson = XrayConfigBuilder.buildOutboundDelayTestJson(server, settings)
             AssetHelper.measureOutboundDelay(app, configJson, settings.delayTestUrl)
@@ -502,18 +543,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveRoutingRule(rule: RoutingRule) {
         viewModelScope.launch {
             repository.saveRoutingRule(rule)
+            if (isTunnelActive()) {
+                _pendingTunnelRestart.value = true
+            }
         }
     }
 
     fun deleteRoutingRule(id: String) {
         viewModelScope.launch {
             repository.deleteRoutingRule(id)
+            if (isTunnelActive()) {
+                _pendingTunnelRestart.value = true
+            }
         }
     }
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch {
-            repository.updateSettings(transform)
+            var tunnelChanged = false
+            repository.updateSettings { current ->
+                val updated = transform(current)
+                tunnelChanged = AppSettings.affectsActiveTunnel(current, updated)
+                updated
+            }
+            if (tunnelChanged && isTunnelActive()) {
+                _pendingTunnelRestart.value = true
+            }
         }
     }
 

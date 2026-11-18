@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,9 +78,11 @@ private enum class SettingsDialogChoice {
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
+    onApplyReconnect: () -> Unit = {},
     onBack: () -> Unit
 ) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle()
+    val pendingTunnelRestart by viewModel.pendingTunnelRestart.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var editDialog by remember { mutableStateOf<SettingEditTarget?>(null) }
@@ -94,6 +98,12 @@ fun SettingsScreen(
     var observatoryExpanded by remember { mutableStateOf(false) }
     var advancedExpanded by remember { mutableStateOf(true) }
     var modeExpanded by remember { mutableStateOf(true) }
+
+    BackHandler(
+        enabled = editDialog == null && activeChoiceDialog == null && !showHelpDialog
+    ) {
+        onBack()
+    }
 
     editDialog?.let { target ->
         TextSettingDialog(
@@ -281,7 +291,6 @@ fun SettingsScreen(
         null -> Unit
     }
 
-    val forcedByAmir = settings.preAmirLocalDnsEnabled != null || settings.preAmirFakeDnsEnabled != null
     val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
 
     Scaffold(
@@ -300,12 +309,49 @@ fun SettingsScreen(
             )
         }
     ) { innerPadding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(bottom = 36.dp)
+                .padding(innerPadding)
         ) {
+            AnimatedVisibility(visible = pendingTunnelRestart) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.pending_reconnect_banner),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                        )
+                        TextButton(
+                            onClick = onApplyReconnect,
+                            modifier = Modifier.testTag("settings_apply_reconnect_button")
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_apply_now),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(bottom = 36.dp)
+            ) {
             // 1. UI settings
             item {
                 CollapsibleSectionHeader(
@@ -400,25 +446,15 @@ fun SettingsScreen(
                         )
                         SwitchRow(
                             title = stringResource(R.string.pref_local_dns_title),
-                            subtitle = if (forcedByAmir) {
-                                stringResource(R.string.pref_forced_amir_dns)
-                            } else {
-                                stringResource(R.string.pref_local_dns_sub)
-                            },
+                            subtitle = stringResource(R.string.pref_local_dns_sub),
                             checked = settings.localDnsEnabled,
-                            enabled = !forcedByAmir,
                             testTag = "switch_local_dns",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(localDnsEnabled = v) } }
                         )
                         SwitchRow(
                             title = stringResource(R.string.pref_fake_dns_title),
-                            subtitle = if (forcedByAmir) {
-                                stringResource(R.string.pref_forced_amir_dns)
-                            } else {
-                                stringResource(R.string.pref_fake_dns_sub)
-                            },
+                            subtitle = stringResource(R.string.pref_fake_dns_sub),
                             checked = settings.fakeDnsEnabled,
-                            enabled = !forcedByAmir,
                             testTag = "switch_fake_dns",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(fakeDnsEnabled = v) } }
                         )
@@ -1031,6 +1067,7 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
         }
     }
 }

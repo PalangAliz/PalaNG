@@ -11,11 +11,16 @@ import com.example.data.model.AppSettings
 import com.example.data.model.RoutingRule
 import com.example.data.model.ServerConfig
 import com.example.data.model.SubscriptionGroup
+import com.example.service.ConnectionState
+import com.example.service.VpnStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 class VpnRepository(
@@ -165,11 +170,34 @@ class VpnRepository(
 
     suspend fun updateSubscription(group: SubscriptionGroup): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
+            val settings = getSettingsSnapshot()
+            val activeProxy = VpnStateHolder.activeProxy.value
+            val client = if (
+                VpnStateHolder.connectionState.value == ConnectionState.CONNECTED &&
+                !settings.vpnMode &&
+                activeProxy.enabled
+            ) {
+                httpClient.newBuilder()
+                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", activeProxy.httpPort)))
+                    .apply {
+                        if (activeProxy.username.isNotBlank() || activeProxy.password.isNotBlank()) {
+                            val credential = Credentials.basic(activeProxy.username, activeProxy.password)
+                            proxyAuthenticator { _, response ->
+                                response.request.newBuilder()
+                                    .header("Proxy-Authorization", credential)
+                                    .build()
+                            }
+                        }
+                    }
+                    .build()
+            } else {
+                httpClient
+            }
             val request = Request.Builder()
                 .url(group.url.trim())
                 .header("User-Agent", group.userAgent.ifBlank { "v2rayNG/1.10.0" })
                 .build()
-            httpClient.newCall(request).execute().use { response ->
+            client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     error("HTTP ${response.code}: ${response.message}")
                 }

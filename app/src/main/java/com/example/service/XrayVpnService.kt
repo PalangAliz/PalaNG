@@ -83,7 +83,6 @@ class XrayVpnService : VpnService() {
 
     override fun onDestroy() {
         stopVpnInternal()
-        restorePreAmirDnsIfNeededBlocking()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -99,7 +98,8 @@ class XrayVpnService : VpnService() {
 
             val app = application as XrayNgApplication
             val rawSettings = app.repository.getSettingsSnapshot()
-            val targetId = requestedServerId.ifBlank { rawSettings.selectedServerId }
+            val settings = clearLegacyAmirDnsLocksIfPresent(app, rawSettings)
+            val targetId = requestedServerId.ifBlank { settings.selectedServerId }
             val server = app.repository.getServerById(targetId)
                 ?: app.repository.getAllServers().firstOrNull()
 
@@ -110,9 +110,6 @@ class XrayVpnService : VpnService() {
                 return@launch
             }
 
-            // Enforce Local DNS + Fake DNS for Amir protocol; restore prior user preference for other configs
-            val settings = applyDnsPolicyForServer(app, server.protocol, rawSettings)
-
             currentServerRemarks = server.remarks
             VpnStateHolder.setError(null)
             VpnStateHolder.setState(ConnectionState.CONNECTING, server.id, server.remarks)
@@ -122,9 +119,18 @@ class XrayVpnService : VpnService() {
 
             runCatching {
                 val rules = app.repository.getRoutingRules()
+
+                // Resolve outbound server & DoH hostnames before VPN interface starts
+                val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
+
                 val amirPort = if (server.protocol == ProtocolType.AMIR) {
+                    if (!settings.localDnsEnabled && !settings.fakeDnsEnabled) {
+                        VpnStateHolder.appendLog("Note: Amir Worker forwards TCP only; enable Local DNS if UDP DNS queries fail")
+                    }
                     val proxy = AmirLocalProxy(
                         serverConfig = server,
+                        settings = settings,
+                        resolvedHosts = resolvedHosts,
                         protectSocket = { sock -> protect(sock) },
                         onLog = { msg -> VpnStateHolder.appendLog(msg) }
                     )
@@ -157,9 +163,6 @@ class XrayVpnService : VpnService() {
                     )
                 )
 
-                // Resolve outbound server domain before VPN interface starts when "Resolve and add to DNS Hosts" is active
-                val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
-
                 val configJson = XrayConfigBuilder.buildFullConfig(
                     server = server,
                     settings = settings,
@@ -169,6 +172,10 @@ class XrayVpnService : VpnService() {
                     runtimeSocksPort = runtimeSocksPort,
                     runtimeHttpPort = runtimeHttpPort
                 )
+
+                if (settings.logLevel != "none") {
+                    logEffectiveSettingsSummary(settings, runtimeSocksPort, runtimeHttpPort)
+                }
 
                 val tunFd = if (settings.vpnMode) {
                     val pfd = buildTunInterface(server.remarks, settings, runtimeHttpPort)
@@ -206,12 +213,11 @@ class XrayVpnService : VpnService() {
 
                 VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
                 updateNotification("Connected: ${server.remarks}")
-                startTrafficMonitor(settings.speedDisplayEnabled)
+                startTrafficMonitor(app)
             }.onFailure { err ->
                 VpnStateHolder.appendLog("Start error: ${err.message}")
                 VpnStateHolder.setError(err.message ?: "Failed to start Xray core")
                 stopVpnInternal()
-                restorePreAmirDnsIfNeeded(app)
                 stopSelf()
             }
         }
@@ -235,36 +241,91 @@ class XrayVpnService : VpnService() {
         server: ServerConfig,
         settings: AppSettings
     ): Map<String, List<String>> {
-        if (settings.outboundDomainResolve != AppSettings.OUTBOUND_RESOLVE_AND_ADD) {
-            return emptyMap()
-        }
-        val host = server.address.trim()
-        if (host.isEmpty() || server.protocol == ProtocolType.AMIR || server.protocol == ProtocolType.CUSTOM) {
-            return emptyMap()
-        }
-        // Skip literal IPv4 / IPv6 addresses
-        if (isIpLiteral(host)) return emptyMap()
+        val resolved = linkedMapOf<String, List<String>>()
+        val userHosts = XrayConfigBuilder.parseDnsHosts(settings.dnsHosts)
 
-        return runCatching {
-            val allAddrs = InetAddress.getAllByName(host).toList()
-            val filtered = when {
-                settings.preferIpv6 -> {
+        fun resolveHostIntoMap(rawHost: String, label: String) {
+            val host = rawHost.trim().removePrefix("[").removeSuffix("]")
+            if (host.isEmpty() || isIpLiteral(host) || host.equals("localhost", ignoreCase = true)) return
+            if (userHosts.containsKey(host) || userHosts.containsKey("domain:$host") || userHosts.containsKey("full:$host")) return
+            if (resolved.containsKey(host)) return
+            runCatching {
+                val allAddrs = InetAddress.getAllByName(host).toList()
+                val filtered = if (settings.preferIpv6) {
                     val v6 = allAddrs.filterIsInstance<Inet6Address>().mapNotNull { it.hostAddress }
                     val v4 = allAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
                     v6 + v4
-                }
-                else -> {
+                } else {
                     allAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
                         .ifEmpty { allAddrs.mapNotNull { it.hostAddress } }
                 }
+                if (filtered.isNotEmpty()) {
+                    resolved[host] = filtered.distinct()
+                    if (settings.logLevel != "none") {
+                        VpnStateHolder.appendLog("Pre-resolved $label $host -> ${filtered.first()}")
+                    }
+                }
             }
-            if (filtered.isNotEmpty()) {
-                VpnStateHolder.appendLog("Resolved outbound host $host -> ${filtered.first()}")
-                mapOf(host to filtered.distinct())
+        }
+
+        if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD) {
+            if (server.protocol == ProtocolType.AMIR) {
+                val workerHost = android.net.Uri.parse(
+                    com.example.core.ConfigParser.normalizeAmirWorkerUrl(server.extraParam1.ifBlank { server.address })
+                ).host.orEmpty().ifBlank { server.address }
+                resolveHostIntoMap(workerHost, "Amir worker")
+                if (server.extraParam2.isNotBlank()) {
+                    resolveHostIntoMap(server.extraParam2, "Amir clean host")
+                }
+            } else if (server.protocol != ProtocolType.CUSTOM) {
+                resolveHostIntoMap(server.address, "outbound host")
+            }
+        }
+
+        // Pre-resolve DoH / DoT / DoQ DNS server hostnames so Xray DNS never hits a self-lookup deadlock
+        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+            XrayConfigBuilder.extractDnsHost(settings.remoteDns)?.let { dnsHost ->
+                resolveHostIntoMap(dnsHost, "Remote DNS host")
+            }
+            XrayConfigBuilder.extractDnsHost(settings.domesticDns)?.let { domHost ->
+                resolveHostIntoMap(domHost, "Direct DNS host")
+            }
+        }
+
+        return resolved
+    }
+
+    private fun logEffectiveSettingsSummary(
+        settings: AppSettings,
+        socksPort: Int,
+        httpPort: Int
+    ) {
+        val modeLabel = if (settings.vpnMode) "VPN(mtu=${settings.vpnMtu},addr=${settings.vpnInterfaceAddress})" else "ProxyOnly"
+        val dnsLabel = buildString {
+            append("localDns=${settings.localDnsEnabled}")
+            append(",fakeDns=${settings.fakeDnsEnabled}")
+            if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+                append(",remoteDns=${settings.remoteDns},directDns=${settings.domesticDns}")
             } else {
-                emptyMap()
+                append(",vpnDns=${settings.vpnDns}")
             }
-        }.getOrElse { emptyMap() }
+        }
+        val extraLabel = buildString {
+            append("routing=${settings.routingMode.name}(${settings.domainStrategy})")
+            append(",bypassLan=${settings.bypassLan}")
+            append(",ipv6=${settings.enableIpv6}/preferV6=${settings.preferIpv6}")
+            append(",outResolve=${settings.outboundDomainResolve}")
+            append(",sniff=${settings.sniffingEnabled}/routeOnly=${settings.routeOnly}")
+            if (settings.muxEnabled) append(",mux=${settings.muxConcurrency}/${settings.muxXudpConcurrency}")
+            if (settings.fragmentEnabled) append(",frag=${settings.fragmentPackets}:${settings.fragmentLength}")
+            if (settings.perAppProxyEnabled) {
+                append(",perApp=${if (settings.perAppBypassMode) "bypass" else "proxy"}(${settings.perAppPackages.size})")
+            }
+            if (settings.effectiveLocalProxyEnabled()) {
+                append(",proxyPorts=S:$socksPort/H:$httpPort")
+            }
+        }
+        VpnStateHolder.appendLog("Applied config: $modeLabel | $dnsLabel | $extraLabel")
     }
 
     private fun isIpLiteral(value: String): Boolean {
@@ -274,68 +335,17 @@ class XrayVpnService : VpnService() {
         return clean.contains(':') && !clean.contains('/')
     }
 
-    private suspend fun applyDnsPolicyForServer(
+    private suspend fun clearLegacyAmirDnsLocksIfPresent(
         app: XrayNgApplication,
-        protocol: ProtocolType,
         current: AppSettings
     ): AppSettings {
-        return if (protocol == ProtocolType.AMIR) {
-            val savedLocal = current.preAmirLocalDnsEnabled ?: current.localDnsEnabled
-            val savedFake = current.preAmirFakeDnsEnabled ?: current.fakeDnsEnabled
-            if (!current.localDnsEnabled || !current.fakeDnsEnabled || current.preAmirLocalDnsEnabled == null) {
-                app.repository.updateSettings { s ->
-                    s.copy(
-                        preAmirLocalDnsEnabled = s.preAmirLocalDnsEnabled ?: savedLocal,
-                        preAmirFakeDnsEnabled = s.preAmirFakeDnsEnabled ?: savedFake,
-                        localDnsEnabled = true,
-                        fakeDnsEnabled = true
-                    )
-                }
-                VpnStateHolder.appendLog("Amir protocol active: forced Enable Local DNS = ON and Enable Fake DNS = ON")
-            }
-            current.copy(
-                preAmirLocalDnsEnabled = current.preAmirLocalDnsEnabled ?: savedLocal,
-                preAmirFakeDnsEnabled = current.preAmirFakeDnsEnabled ?: savedFake,
-                localDnsEnabled = true,
-                fakeDnsEnabled = true
-            )
-        } else {
-            restorePreAmirDnsIfNeeded(app, current)
-        }
-    }
-
-    private suspend fun restorePreAmirDnsIfNeeded(
-        app: XrayNgApplication,
-        snapshot: AppSettings? = null
-    ): AppSettings {
-        val current = snapshot ?: app.repository.getSettingsSnapshot()
         if (current.preAmirLocalDnsEnabled == null && current.preAmirFakeDnsEnabled == null) {
             return current
         }
-        val restoredLocal = current.preAmirLocalDnsEnabled ?: current.localDnsEnabled
-        val restoredFake = current.preAmirFakeDnsEnabled ?: current.fakeDnsEnabled
         app.repository.updateSettings { s ->
-            s.copy(
-                localDnsEnabled = s.preAmirLocalDnsEnabled ?: s.localDnsEnabled,
-                fakeDnsEnabled = s.preAmirFakeDnsEnabled ?: s.fakeDnsEnabled,
-                preAmirLocalDnsEnabled = null,
-                preAmirFakeDnsEnabled = null
-            )
+            s.copy(preAmirLocalDnsEnabled = null, preAmirFakeDnsEnabled = null)
         }
-        VpnStateHolder.appendLog("Restored previous DNS settings (Local DNS=$restoredLocal, Fake DNS=$restoredFake)")
-        return current.copy(
-            localDnsEnabled = restoredLocal,
-            fakeDnsEnabled = restoredFake,
-            preAmirLocalDnsEnabled = null,
-            preAmirFakeDnsEnabled = null
-        )
-    }
-
-    private fun restorePreAmirDnsIfNeededBlocking() {
-        runCatching {
-            val app = application as XrayNgApplication
-            runBlocking { restorePreAmirDnsIfNeeded(app) }
-        }
+        return current.copy(preAmirLocalDnsEnabled = null, preAmirFakeDnsEnabled = null)
     }
 
     private fun buildTunInterface(
@@ -365,7 +375,10 @@ class XrayVpnService : VpnService() {
 
         if (settings.enableIpv6) {
             builder.addAddress("fd00:10:0:0::2", 126)
-            if (settings.localDnsEnabled || settings.fakeDnsEnabled || parsedVpnDns.none { it.contains(':') }) {
+            if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+                // Use local TUN IPv6 router so Android Private DNS (port 853) does not probe external Cloudflare IPs
+                builder.addDnsServer("fd00:10:0:0::1")
+            } else if (parsedVpnDns.none { it.contains(':') }) {
                 builder.addDnsServer("2606:4700:4700::1111")
             }
         }
@@ -465,12 +478,15 @@ class XrayVpnService : VpnService() {
         })
     }
 
-    private fun startTrafficMonitor(speedDisplayEnabled: Boolean) {
+    private fun startTrafficMonitor(app: XrayNgApplication) {
         trafficJob?.cancel()
         trafficJob = serviceScope.launch {
+            var lastSpeedEnabled = true
             while (isActive && VpnStateHolder.connectionState.value == ConnectionState.CONNECTED) {
                 delay(1000L)
                 val controller = coreController ?: break
+                val speedDisplayEnabled = runCatching { app.repository.getSettingsSnapshot().speedDisplayEnabled }
+                    .getOrDefault(lastSpeedEnabled)
                 val rawStats = runCatching { controller.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
                 var uplink = 0L
                 var downlink = 0L
@@ -495,7 +511,10 @@ class XrayVpnService : VpnService() {
                     val dominantTag = if (directTotal > uplink + downlink) "Direct" else "Proxy"
                     val speedText = "↑ ${formatSpeed(uplink)} | ↓ ${formatSpeed(downlink)} ($dominantTag)"
                     updateNotification("$currentServerRemarks • $speedText")
+                } else if (lastSpeedEnabled) {
+                    updateNotification("Connected: $currentServerRemarks")
                 }
+                lastSpeedEnabled = speedDisplayEnabled
             }
         }
     }
@@ -525,8 +544,6 @@ class XrayVpnService : VpnService() {
         VpnStateHolder.setState(ConnectionState.DISCONNECTING)
         serviceScope.launch {
             stopVpnInternal()
-            val app = application as XrayNgApplication
-            restorePreAmirDnsIfNeeded(app)
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }

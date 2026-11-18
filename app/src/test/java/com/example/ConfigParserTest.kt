@@ -7,6 +7,7 @@ import com.example.data.model.ProtocolType
 import com.example.data.model.RoutingMode
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -108,10 +109,12 @@ class ConfigParserTest {
         assertTrue(root.has("dns"))
         assertTrue(root.has("fakedns"))
         val dns = root.getJSONObject("dns")
+        assertEquals("dns-internal", dns.getString("tag"))
         assertEquals("UseIPv4", dns.getString("queryStrategy"))
         val dnsServers = dns.getJSONArray("servers")
         assertEquals("fakedns", dnsServers.getString(0))
-        assertEquals("https://8.8.8.8/dns-query", dnsServers.getString(1))
+        // User's configured remoteDns must never be silently overwritten
+        assertEquals("https://1.1.1.1/dns-query", dnsServers.getString(1))
 
         val tunSniff = root.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
         assertTrue(tunSniff.getBoolean("enabled"))
@@ -119,21 +122,31 @@ class ConfigParserTest {
         assertEquals("fakedns", tunSniff.getJSONArray("destOverride").getString(0))
 
         val routing = root.getJSONObject("routing")
-        assertEquals("AsIs", routing.getString("domainStrategy"))
+        assertEquals("IPIfNonMatch", routing.getString("domainStrategy"))
         val rules = routing.getJSONArray("rules")
-        var hasUdpBlock = false
+        var dnsDirectIndex = -1
+        var dnsProxyIndex = -1
+        var udpBlockIndex = -1
         var hasFakeDnsIpRoute = false
         for (i in 0 until rules.length()) {
             val r = rules.getJSONObject(i)
+            val inboundTag = r.optJSONArray("inboundTag")
+            if (inboundTag != null && inboundTag.optString(0) == "dns-internal") {
+                when (r.optString("outboundTag")) {
+                    "direct" -> dnsDirectIndex = i
+                    "proxy" -> dnsProxyIndex = i
+                }
+            }
             if (r.optString("network") == "udp" && r.optString("outboundTag") == "block") {
-                hasUdpBlock = true
+                udpBlockIndex = i
             }
             val ips = r.optJSONArray("ip")
             if (ips != null && ips.optString(0) == "198.18.0.0/15" && r.optString("outboundTag") == "proxy") {
                 hasFakeDnsIpRoute = true
             }
         }
-        assertTrue(hasUdpBlock)
+        assertTrue("Expected dns-internal direct rule before UDP block", dnsDirectIndex in 0 until udpBlockIndex)
+        assertTrue("Expected dns-internal proxy rule before UDP block", dnsProxyIndex in 0 until udpBlockIndex)
         assertTrue(hasFakeDnsIpRoute)
 
         val proxyOutbound = root.getJSONArray("outbounds").getJSONObject(0)
@@ -374,7 +387,13 @@ class ConfigParserTest {
         assertEquals("5-10", fragmentObj.getString("maxSplit"))
 
         val directOutbound = outbounds.getJSONObject(2)
-        assertEquals("AsIs", directOutbound.getJSONObject("settings").getString("domainStrategy"))
+        assertEquals(
+            "AsIs",
+            directOutbound.getJSONObject("streamSettings").getJSONObject("sockopt").getString("domainStrategy")
+        )
+        val proxySockopt = outbounds.getJSONObject(0).getJSONObject("streamSettings").getJSONObject("sockopt")
+        assertEquals("AsIs", proxySockopt.getString("domainStrategy"))
+        assertEquals("fragment", proxySockopt.getString("dialerProxy"))
 
         assertTrue(root.has("burstObservatory"))
         assertEquals(false, root.has("observatory"))
@@ -399,7 +418,8 @@ class ConfigParserTest {
             vpnMode = true,
             localProxyEnabled = false,
             observatoryMode = AppSettings.OBSERVATORY_LEAST_PING,
-            observatoryInterval = "4m"
+            observatoryInterval = "4m",
+            delayTestUrl = "https://example.org/generate_204"
         )
         val root = JSONObject(XrayConfigBuilder.buildFullConfig(server, settings, emptyList()))
         val inbounds = root.getJSONArray("inbounds")
@@ -407,6 +427,193 @@ class ConfigParserTest {
         assertEquals("tun", inbounds.getJSONObject(0).getString("protocol"))
         assertTrue(root.has("observatory"))
         assertEquals(false, root.has("burstObservatory"))
-        assertEquals("4m", root.getJSONObject("observatory").getString("probeInterval"))
+        val obs = root.getJSONObject("observatory")
+        assertEquals("4m", obs.getString("probeInterval"))
+        assertEquals("https://example.org/generate_204", obs.getString("probeURL"))
+        assertFalse(obs.has("probeUrl"))
+    }
+
+    @Test
+    fun `bypassLan false omits geoip private rule across routing modes and socks skips fragment on loopback`() {
+        val vlessServer = ConfigParser.parseSingleUri(
+            "vless://11111111-1111-1111-1111-111111111111@vpn.example.com:443?encryption=none&security=tls&type=tcp#Node"
+        )!!
+        listOf(
+            RoutingMode.BYPASS_LAN,
+            RoutingMode.BYPASS_LAN_AND_IR,
+            RoutingMode.BYPASS_LAN_AND_MAINLAND,
+            RoutingMode.GLOBAL_PROXY
+        ).forEach { mode ->
+            val root = JSONObject(
+                XrayConfigBuilder.buildFullConfig(
+                    server = vlessServer,
+                    settings = AppSettings(routingMode = mode, bypassLan = false),
+                    customRules = emptyList()
+                )
+            )
+            val rules = root.getJSONObject("routing").getJSONArray("rules")
+            for (i in 0 until rules.length()) {
+                val ips = rules.getJSONObject(i).optJSONArray("ip") ?: continue
+                for (j in 0 until ips.length()) {
+                    assertFalse(
+                        "Found geoip:private even though bypassLan=false in $mode",
+                        ips.getString(j) == "geoip:private"
+                    )
+                }
+            }
+        }
+
+        val loopbackSocks = ConfigParser.parseSingleUri("socks://127.0.0.1:40446#LocalSocks")!!
+        val socksRoot = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                server = loopbackSocks,
+                settings = AppSettings(fragmentEnabled = true, outboundDomainResolve = AppSettings.OUTBOUND_USE_IPV4),
+                customRules = emptyList()
+            )
+        )
+        val socksSockopt = socksRoot.getJSONArray("outbounds").getJSONObject(0)
+            .getJSONObject("streamSettings").getJSONObject("sockopt")
+        assertEquals("UseIPv4", socksSockopt.getString("domainStrategy"))
+        assertFalse(socksSockopt.has("dialerProxy"))
+    }
+
+    @Test
+    fun `affectsActiveTunnel distinguishes UI preferences from connection settings`() {
+        val base = AppSettings()
+        assertFalse(
+            AppSettings.affectsActiveTunnel(
+                base,
+                base.copy(
+                    speedDisplayEnabled = !base.speedDisplayEnabled,
+                    twoColumnLayout = !base.twoColumnLayout,
+                    confirmDeleteConfig = !base.confirmDeleteConfig
+                )
+            )
+        )
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(vpnMtu = 1400)))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(localDnsEnabled = !base.localDnsEnabled)))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(fakeDnsEnabled = !base.fakeDnsEnabled)))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(remoteDns = "https://cloudflare-dns.com/dns-query")))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(fragmentEnabled = !base.fragmentEnabled)))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(muxEnabled = !base.muxEnabled)))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(bypassLan = !base.bypassLan)))
+        assertTrue(AppSettings.affectsActiveTunnel(base, base.copy(perAppProxyEnabled = !base.perAppProxyEnabled)))
+    }
+
+    @Test
+    fun `AmirLocalProxy honors dnsHosts mapping for unresolvable worker domain`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
+        val serverSock = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = serverSock.localPort
+
+        val serverThread = Thread {
+            val client = serverSock.accept()
+            client.use { s ->
+                val inp = java.io.BufferedInputStream(s.getInputStream())
+                val out = s.getOutputStream()
+                var wsKey = ""
+                while (true) {
+                    val sb = StringBuilder()
+                    while (true) {
+                        val c = inp.read()
+                        if (c < 0 || c == '\n'.code) break
+                        if (c != '\r'.code) sb.append(c.toChar())
+                    }
+                    val line = sb.toString()
+                    if (line.isEmpty()) break
+                    if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                        wsKey = line.substringAfter(':').trim()
+                    }
+                }
+                val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                    .digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII))
+                val accept = android.util.Base64.encodeToString(sha1, android.util.Base64.NO_WRAP)
+                out.write(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n" +
+                            "Upgrade: websocket\r\n" +
+                            "Connection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: $accept\r\n" +
+                            "Sec-WebSocket-Protocol: chat.v2\r\n\r\n"
+                        ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+
+                fun readFrame(): ByteArray {
+                    inp.read()
+                    val b1 = inp.read()
+                    val masked = (b1 and 0x80) != 0
+                    val len = b1 and 0x7F
+                    val mask = if (masked) ByteArray(4).also { java.io.DataInputStream(inp).readFully(it) } else null
+                    val data = ByteArray(len).also { java.io.DataInputStream(inp).readFully(it) }
+                    if (mask != null) {
+                        for (i in data.indices) data[i] = (data[i].toInt() xor mask[i and 3].toInt()).toByte()
+                    }
+                    return data
+                }
+
+                fun writeFrame(data: ByteArray) {
+                    out.write(0x82)
+                    out.write(data.size)
+                    out.write(data)
+                    out.flush()
+                }
+
+                val init = readFrame()
+                val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, init.copyOfRange(0, 16))
+                val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                    .copyOfRange(0, 16)
+                writeFrame(com.example.core.AmirLocalProxy.xorBytes(expectedAck, key))
+                val reqData = com.example.core.AmirLocalProxy.xorBytes(readFrame(), key)
+                writeFrame(com.example.core.AmirLocalProxy.xorBytes(("DNSOK:" + String(reqData)).toByteArray(), key))
+                out.write(byteArrayOf(0x88.toByte(), 0x00))
+                out.flush()
+            }
+        }
+        serverThread.isDaemon = true
+        serverThread.start()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "DnsMappedAmir",
+            protocol = ProtocolType.AMIR,
+            address = "worker.invalid",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "ws://worker.invalid:$wsPort/",
+            extraParam2 = ""
+        )
+        val settings = AppSettings(
+            dnsHosts = "worker.invalid:127.0.0.1",
+            outboundDomainResolve = AppSettings.OUTBOUND_USE_IPV4,
+            preferIpv6 = false
+        )
+        val proxy = com.example.core.AmirLocalProxy(serverConfig = cfg, settings = settings)
+        val localPort = proxy.start()
+        try {
+            java.net.Socket("127.0.0.1", localPort).use { sock ->
+                sock.soTimeout = 5000
+                val out = sock.getOutputStream()
+                val inp = java.io.DataInputStream(sock.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                inp.readFully(ByteArray(2))
+                val host = "example.com".toByteArray(Charsets.UTF_8)
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x03, host.size.toByte()) + host + byteArrayOf(0x00, 0x50))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.readFully(rep)
+                assertEquals(0, rep[1].toInt())
+                out.write("HI".toByteArray())
+                out.flush()
+                val buf = ByteArray(32)
+                val n = inp.read(buf)
+                assertTrue(n > 0)
+                assertEquals("DNSOK:HI", String(buf, 0, n))
+            }
+        } finally {
+            proxy.stop()
+            serverSock.close()
+        }
     }
 }

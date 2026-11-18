@@ -39,6 +39,8 @@
     <string name="action_close">بستن</string>
     <string name="action_delete">حذف</string>
     <string name="action_retest">تست مجدد</string>
+    <string name="action_apply_now">اعمال و اتصال مجدد</string>
+    <string name="pending_reconnect_banner">تنظیمات اتصال تغییر کرد — هنگام بازگشت به‌صورت خودکار اعمال می‌شود</string>
 
     <string name="confirm_delete_title">حذف کانفیگ؟</string>
     <string name="confirm_delete_message">آیا «%1$s» از فهرست پروفایل‌ها حذف شود؟</string>
@@ -177,7 +179,7 @@
     <string name="mode_proxy_only">فقط پراکسی (Proxy only)</string>
     <string name="pref_more_help_title">راهنمای بیشتر</string>
     <string name="pref_more_help_sub">توضیحات درباره Local DNS، FakeDNS، Fragment، Mux و هسته Amir</string>
-    <string name="help_dialog_body">• حالت VPN از رابط بومی Go TUN درون هسته Xray استفاده می‌کند.\n\n• برای مسیریابی سریع DNS و پروتکل Amir، فعال بودن Local DNS و FakeDNS ضروری است.\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور را پیش از بالا آمدن تونل ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، Mux، Fragment و Observatory در اتصال بعدی اعمال می‌شوند.</string>
+    <string name="help_dialog_body">• حالت VPN از رابط بومی Go TUN درون هسته Xray استفاده می‌کند.\n\n• برای مسیریابی سریع DNS و پروتکل Amir، فعال بودن Local DNS و FakeDNS پیشنهاد می‌شود.\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور و DNS را پیش از بالا آمدن تونل ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، مسیریابی، پراکسی برنامه‌ها، Mux، Fragment و Observatory هنگام اتصال، به‌صورت خودکار با اتصال مجدد اعمال می‌شوند.</string>
 
     <string name="about_title">درباره برنامه</string>
 </resources>

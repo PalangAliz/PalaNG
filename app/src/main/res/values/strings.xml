@@ -39,6 +39,8 @@
     <string name="action_close">Close</string>
     <string name="action_delete">Delete</string>
     <string name="action_retest">Retest</string>
+    <string name="action_apply_now">Apply &amp; Reconnect</string>
+    <string name="pending_reconnect_banner">Connection settings changed — applies automatically on return</string>
 
     <string name="confirm_delete_title">Delete configuration?</string>
     <string name="confirm_delete_message">Remove \"%1$s\" from your profile list?</string>
@@ -177,7 +179,7 @@
     <string name="mode_proxy_only">Proxy only</string>
     <string name="pref_more_help_title">Click me for more help</string>
     <string name="pref_more_help_sub">Notes about Local DNS, FakeDNS, Fragment, Mux &amp; Amir engine</string>
-    <string name="help_dialog_body">• VPN Mode uses Xray-core native Go TUN (no root or external TUN daemon needed).\n\n• Enable Local DNS + FakeDNS is required for fast DNS routing and Amir protocol.\n\n• Outbound domain resolution \"Resolve and add to DNS Hosts\" resolves your proxy server hostname before tunnel startup to avoid DNS bootstrap loops.\n\n• Changes to Core, VPN, Mux, Fragment, or Observatory settings take effect next time you connect.</string>
+    <string name="help_dialog_body">• VPN Mode uses Xray-core native Go TUN (no root or external TUN daemon needed).\n\n• Enable Local DNS + FakeDNS is recommended for fast DNS routing and Amir protocol.\n\n• Outbound domain resolution \"Resolve and add to DNS Hosts\" resolves your proxy server hostname and DoH endpoints before tunnel startup to avoid DNS bootstrap loops.\n\n• Changes to Core, VPN, Routing, Per-App, Mux, Fragment, or Observatory settings apply automatically when returning from settings while connected.</string>
 
     <string name="about_title">About</string>
 </resources>

@@ -89,6 +89,32 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    val vpnReconnectConsentLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.StartActivityForResult()
+                    ) { result ->
+                        if (result.resultCode == RESULT_OK) {
+                            viewModel.applyPendingTunnelRestartIfNeeded()
+                        }
+                    }
+
+                    val onApplyReconnect: () -> Unit = {
+                        if (viewModel.pendingTunnelRestart.value) {
+                            val latestSettings = viewModel.settingsFlow.value
+                            val state = viewModel.connectionState.value
+                            val active = state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING
+                            val prepareIntent: Intent? = if (active && latestSettings.vpnMode) {
+                                VpnService.prepare(this)
+                            } else {
+                                null
+                            }
+                            if (prepareIntent != null) {
+                                vpnReconnectConsentLauncher.launch(prepareIntent)
+                            } else {
+                                viewModel.applyPendingTunnelRestartIfNeeded()
+                            }
+                        }
+                    }
+
                     val notificationPermLauncher = rememberLauncherForActivityResult(
                         contract = ActivityResultContracts.RequestPermission()
                     ) {
@@ -169,19 +195,31 @@ class MainActivity : ComponentActivity() {
                         composable<AppRoute.RoutingSettings> {
                             RoutingSettingsScreen(
                                 viewModel = viewModel,
-                                onBack = { navController.popBackStack() }
+                                onApplyReconnect = onApplyReconnect,
+                                onBack = {
+                                    onApplyReconnect()
+                                    navController.popBackStack()
+                                }
                             )
                         }
                         composable<AppRoute.PerAppProxy> {
                             PerAppProxyScreen(
                                 viewModel = viewModel,
-                                onBack = { navController.popBackStack() }
+                                onApplyReconnect = onApplyReconnect,
+                                onBack = {
+                                    onApplyReconnect()
+                                    navController.popBackStack()
+                                }
                             )
                         }
                         composable<AppRoute.Settings> {
                             SettingsScreen(
                                 viewModel = viewModel,
-                                onBack = { navController.popBackStack() }
+                                onApplyReconnect = onApplyReconnect,
+                                onBack = {
+                                    onApplyReconnect()
+                                    navController.popBackStack()
+                                }
                             )
                         }
                         composable<AppRoute.Logs> {

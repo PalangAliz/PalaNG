@@ -124,5 +124,54 @@ data class AppSettings(
         fun resolveVpnInterfacePreset(key: String): VpnAddressPreset {
             return VPN_ADDRESS_PRESETS.firstOrNull { it.key == key } ?: VPN_ADDRESS_PRESETS.first()
         }
+
+        fun affectsActiveTunnel(old: AppSettings, new: AppSettings): Boolean {
+            return old.vpnMode != new.vpnMode ||
+                old.enableIpv6 != new.enableIpv6 ||
+                old.preferIpv6 != new.preferIpv6 ||
+                old.localDnsEnabled != new.localDnsEnabled ||
+                old.fakeDnsEnabled != new.fakeDnsEnabled ||
+                old.vpnDns != new.vpnDns ||
+                old.appendHttpProxyToVpn != new.appendHttpProxyToVpn ||
+                old.bypassLan != new.bypassLan ||
+                old.vpnInterfaceAddress != new.vpnInterfaceAddress ||
+                old.vpnMtu != new.vpnMtu ||
+                old.perAppProxyEnabled != new.perAppProxyEnabled ||
+                old.perAppBypassMode != new.perAppBypassMode ||
+                old.perAppPackages != new.perAppPackages ||
+                old.sniffingEnabled != new.sniffingEnabled ||
+                old.routeOnly != new.routeOnly ||
+                old.localProxyEnabled != new.localProxyEnabled ||
+                old.allowLan != new.allowLan ||
+                old.dynamicProxyPortEnabled != new.dynamicProxyPortEnabled ||
+                old.socksPort != new.socksPort ||
+                old.httpPort != new.httpPort ||
+                old.localProxyUsername != new.localProxyUsername ||
+                old.localProxyPassword != new.localProxyPassword ||
+                old.socks5UdpEnabled != new.socks5UdpEnabled ||
+                old.remoteDns != new.remoteDns ||
+                old.domesticDns != new.domesticDns ||
+                old.dnsHosts != new.dnsHosts ||
+                old.logLevel != new.logLevel ||
+                old.outboundDomainResolve != new.outboundDomainResolve ||
+                old.routingMode != new.routingMode ||
+                old.domainStrategy != new.domainStrategy ||
+                old.muxEnabled != new.muxEnabled ||
+                old.muxConcurrency != new.muxConcurrency ||
+                old.muxXudpConcurrency != new.muxXudpConcurrency ||
+                old.muxXudpProxyUdp443 != new.muxXudpProxyUdp443 ||
+                old.fragmentEnabled != new.fragmentEnabled ||
+                old.fragmentPackets != new.fragmentPackets ||
+                old.fragmentLength != new.fragmentLength ||
+                old.fragmentInterval != new.fragmentInterval ||
+                old.fragmentMaxSplit != new.fragmentMaxSplit ||
+                old.observatoryMode != new.observatoryMode ||
+                old.observatoryInterval != new.observatoryInterval ||
+                old.burstObservatoryInterval != new.burstObservatoryInterval ||
+                old.burstObservatoryHttpMethod != new.burstObservatoryHttpMethod ||
+                old.burstObservatorySampling != new.burstObservatorySampling ||
+                old.burstObservatoryTimeout != new.burstObservatoryTimeout ||
+                (new.observatoryMode != OBSERVATORY_NONE && old.delayTestUrl != new.delayTestUrl)
+        }
     }
 }

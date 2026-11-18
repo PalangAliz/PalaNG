@@ -60,7 +60,7 @@ object XrayConfigBuilder {
                     "observatory",
                     JSONObject()
                         .put("subjectSelector", JSONArray().put("proxy"))
-                        .put("probeUrl", testUrl)
+                        .put("probeURL", testUrl)
                         .put("probeInterval", settings.observatoryInterval.trim().ifBlank { "3m" })
                 )
             }
@@ -93,10 +93,18 @@ object XrayConfigBuilder {
         root.put("log", JSONObject().put("loglevel", "none"))
         val outbounds = JSONArray()
         outbounds.put(buildProxyOutbound(server, settings))
-        if (settings.fragmentEnabled) {
+        if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
             outbounds.put(buildFragmentOutbound(settings))
         }
-        outbounds.put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
+        outbounds.put(
+            JSONObject()
+                .put("tag", "direct")
+                .put("protocol", "freedom")
+                .put(
+                    "streamSettings",
+                    JSONObject().put("sockopt", JSONObject().put("domainStrategy", resolveSockoptDomainStrategy(settings)))
+                )
+        )
         root.put("outbounds", outbounds)
         return root.toString()
     }
@@ -141,10 +149,13 @@ object XrayConfigBuilder {
                 root.put("dns", dnsObj)
             }
             val testUrl = settings.delayTestUrl.trim().ifBlank { "https://www.gstatic.com/generate_204" }
+            root.optJSONObject("log")?.put("loglevel", settings.logLevel)
             root.optJSONObject("observatory")?.let { obs ->
                 obs.put("probeInterval", settings.observatoryInterval.trim().ifBlank { "3m" })
-                if (!obs.has("probeUrl") || obs.optString("probeUrl").isBlank()) {
-                    obs.put("probeUrl", testUrl)
+                if ((!obs.has("probeURL") || obs.optString("probeURL").isBlank()) &&
+                    (!obs.has("probeUrl") || obs.optString("probeUrl").isBlank())
+                ) {
+                    obs.put("probeURL", testUrl)
                 }
             }
             root.optJSONObject("burstObservatory")?.optJSONObject("pingConfig")?.let { ping ->
@@ -275,6 +286,16 @@ object XrayConfigBuilder {
         }
     }
 
+    fun resolveSockoptDomainStrategy(settings: AppSettings): String {
+        return when (settings.outboundDomainResolve) {
+            AppSettings.OUTBOUND_AS_IS -> "AsIs"
+            AppSettings.OUTBOUND_USE_IP -> "UseIP"
+            AppSettings.OUTBOUND_USE_IPV4 -> "UseIPv4"
+            AppSettings.OUTBOUND_USE_IPV6 -> "UseIPv6"
+            else -> if (settings.preferIpv6) "UseIP" else "UseIPv4"
+        }
+    }
+
     private fun buildOutbounds(
         server: ServerConfig,
         settings: AppSettings,
@@ -285,18 +306,15 @@ object XrayConfigBuilder {
         if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
             outbounds.put(buildFragmentOutbound(settings))
         }
-        val directDomainStrategy = when (settings.outboundDomainResolve) {
-            AppSettings.OUTBOUND_AS_IS -> "AsIs"
-            AppSettings.OUTBOUND_USE_IP -> "UseIP"
-            AppSettings.OUTBOUND_USE_IPV4 -> "UseIPv4"
-            AppSettings.OUTBOUND_USE_IPV6 -> "UseIPv6"
-            else -> if (settings.preferIpv6) "UseIP" else "UseIPv4"
-        }
+        val directDomainStrategy = resolveSockoptDomainStrategy(settings)
         outbounds.put(
             JSONObject().apply {
                 put("tag", "direct")
                 put("protocol", "freedom")
-                put("settings", JSONObject().put("domainStrategy", directDomainStrategy))
+                put(
+                    "streamSettings",
+                    JSONObject().put("sockopt", JSONObject().put("domainStrategy", directDomainStrategy))
+                )
             }
         )
         outbounds.put(
@@ -412,6 +430,14 @@ object XrayConfigBuilder {
                     )
                 }
                 outbound.put("settings", JSONObject().put("servers", JSONArray().put(srv)))
+                val isLoopback = isLoopbackAddress(server.address)
+                outbound.put(
+                    "streamSettings",
+                    JSONObject().put(
+                        "sockopt",
+                        buildOutboundSockopt(settings, allowFragment = !isLoopback)
+                    )
+                )
             }
 
             ProtocolType.HTTP -> {
@@ -431,6 +457,14 @@ object XrayConfigBuilder {
                     )
                 }
                 outbound.put("settings", JSONObject().put("servers", JSONArray().put(srv)))
+                val isLoopback = isLoopbackAddress(server.address)
+                outbound.put(
+                    "streamSettings",
+                    JSONObject().put(
+                        "sockopt",
+                        buildOutboundSockopt(settings, allowFragment = !isLoopback)
+                    )
+                )
             }
 
             ProtocolType.WIREGUARD -> {
@@ -482,6 +516,7 @@ object XrayConfigBuilder {
                     .put("security", "tls")
                     .put("hysteriaSettings", hysteriaTransport)
                     .put("tlsSettings", buildTlsSettings(server))
+                    .put("sockopt", buildOutboundSockopt(settings, allowFragment = true))
                 outbound.put("streamSettings", stream)
             }
 
@@ -614,11 +649,26 @@ object XrayConfigBuilder {
             }
         }
 
-        if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
-            stream.put("sockopt", JSONObject().put("dialerProxy", "fragment"))
-        }
+        val allowFrag = server.protocol != ProtocolType.WIREGUARD &&
+            server.protocol != ProtocolType.AMIR &&
+            !isLoopbackAddress(server.address)
+        stream.put("sockopt", buildOutboundSockopt(settings, allowFragment = allowFrag))
 
         return stream
+    }
+
+    private fun buildOutboundSockopt(settings: AppSettings, allowFragment: Boolean): JSONObject {
+        return JSONObject().apply {
+            put("domainStrategy", resolveSockoptDomainStrategy(settings))
+            if (settings.fragmentEnabled && allowFragment) {
+                put("dialerProxy", "fragment")
+            }
+        }
+    }
+
+    private fun isLoopbackAddress(host: String): Boolean {
+        val clean = host.trim().lowercase().removePrefix("[").removeSuffix("]")
+        return clean == "127.0.0.1" || clean == "localhost" || clean == "::1"
     }
 
     private fun buildTlsSettings(server: ServerConfig): JSONObject {
@@ -704,11 +754,16 @@ object XrayConfigBuilder {
         hostsObj: JSONObject = JSONObject()
     ): JSONObject {
         val servers = JSONArray()
-        val domestic = if (isAmir) {
-            "localhost"
-        } else {
-            settings.domesticDns.ifBlank { "223.5.5.5" }
+        val domestic = settings.domesticDns.trim().ifBlank { "223.5.5.5" }
+        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://1.1.1.1/dns-query" }
+
+        if (settings.fakeDnsEnabled) {
+            servers.put("fakedns")
         }
+
+        // Always respect user's configured Remote DNS (do not overwrite Cloudflare/custom endpoints)
+        servers.put(configuredRemote)
+
         when (settings.routingMode) {
             RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
                 servers.put(
@@ -728,36 +783,48 @@ object XrayConfigBuilder {
             }
             else -> Unit
         }
-        if (settings.fakeDnsEnabled) {
-            servers.put("fakedns")
+
+        // Bootstrap fallback if Remote DNS uses a hostname that was not pre-resolved into hostsObj
+        val remoteDnsHost = extractDnsHost(configuredRemote)
+        if (remoteDnsHost != null && !hostsObj.has(remoteDnsHost)) {
+            servers.put(
+                JSONObject()
+                    .put("address", if (isIpLiteral(domestic)) domestic else "localhost")
+                    .put("domains", JSONArray().put("full:$remoteDnsHost"))
+            )
         }
-        val configuredRemote = settings.remoteDns.trim().ifBlank { "https://1.1.1.1/dns-query" }
-        val isTcpCapableScheme = configuredRemote.startsWith("https://", ignoreCase = true) ||
-            configuredRemote.startsWith("https+local://", ignoreCase = true) ||
-            configuredRemote.startsWith("tcp://", ignoreCase = true) ||
-            configuredRemote.startsWith("tcp+local://", ignoreCase = true)
-        val isCloudflareEndpoint = configuredRemote.contains("1.1.1.1") ||
-            configuredRemote.contains("1.0.0.1") ||
-            configuredRemote.contains("1.1.1.2") ||
-            configuredRemote.contains("1.0.0.2") ||
-            configuredRemote.contains("1.1.1.3") ||
-            configuredRemote.contains("1.0.0.3") ||
-            configuredRemote.contains("cloudflare-dns.com", ignoreCase = true) ||
-            configuredRemote.contains("one.one.one.one", ignoreCase = true)
-        val effectiveRemote = if (isAmir && (!isTcpCapableScheme || isCloudflareEndpoint)) {
-            "https://8.8.8.8/dns-query"
-        } else {
-            configuredRemote
-        }
-        servers.put(effectiveRemote)
 
         val dnsObj = JSONObject()
+            .put("tag", "dns-internal")
             .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
             .put("servers", servers)
         if (hostsObj.length() > 0) {
             dnsObj.put("hosts", hostsObj)
         }
         return dnsObj
+    }
+
+    fun extractDnsHost(dnsUrl: String): String? {
+        val trimmed = dnsUrl.trim()
+        val afterScheme = trimmed.substringAfter("://", "")
+        if (afterScheme.isEmpty()) return null
+        val authority = afterScheme.substringBefore('/').substringBefore('?')
+        val host = if (authority.startsWith("[")) {
+            authority.substringAfter('[').substringBefore(']')
+        } else {
+            authority.substringBefore(':')
+        }.trim()
+        if (host.isEmpty() || isIpLiteral(host) || host.equals("localhost", ignoreCase = true)) {
+            return null
+        }
+        return host
+    }
+
+    private fun isIpLiteral(value: String): Boolean {
+        val clean = value.removePrefix("[").removeSuffix("]")
+        val ipv4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+        if (ipv4.matches(clean)) return true
+        return clean.contains(':') && !clean.contains('/')
     }
 
     private fun buildRouting(
@@ -784,6 +851,29 @@ object XrayConfigBuilder {
                         .put("outboundTag", "dns-out")
                 )
             }
+
+            // Route internal DNS module traffic cleanly to avoid DNS loops and Amir UDP block
+            val domesticRaw = settings.domesticDns.trim().ifBlank { "223.5.5.5" }
+            val domesticHostOrIp = extractDnsHost(domesticRaw) ?: domesticRaw.substringBefore(':').trim()
+            if (domesticHostOrIp.isNotEmpty() && !domesticHostOrIp.equals("localhost", ignoreCase = true)) {
+                val directDnsRule = JSONObject()
+                    .put("type", "field")
+                    .put("inboundTag", JSONArray().put("dns-internal"))
+                    .put("outboundTag", "direct")
+                if (isIpLiteral(domesticHostOrIp)) {
+                    directDnsRule.put("ip", JSONArray().put(domesticHostOrIp))
+                } else {
+                    directDnsRule.put("domain", JSONArray().put("full:$domesticHostOrIp"))
+                }
+                rules.put(directDnsRule)
+            }
+
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("inboundTag", JSONArray().put("dns-internal"))
+                    .put("outboundTag", "proxy")
+            )
         }
 
         if (settings.fakeDnsEnabled) {
@@ -801,18 +891,24 @@ object XrayConfigBuilder {
 
         when (settings.routingMode) {
             RoutingMode.BYPASS_LAN -> {
-                rules.put(
-                    JSONObject()
-                        .put("type", "field")
-                        .put("ip", JSONArray().put("geoip:private"))
-                        .put("outboundTag", "direct")
-                )
+                if (settings.bypassLan) {
+                    rules.put(
+                        JSONObject()
+                            .put("type", "field")
+                            .put("ip", JSONArray().put("geoip:private"))
+                            .put("outboundTag", "direct")
+                    )
+                }
             }
             RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
+                val ipArr = JSONArray().apply {
+                    if (settings.bypassLan) put("geoip:private")
+                    put("geoip:cn")
+                }
                 rules.put(
                     JSONObject()
                         .put("type", "field")
-                        .put("ip", JSONArray().put("geoip:private").put("geoip:cn"))
+                        .put("ip", ipArr)
                         .put("outboundTag", "direct")
                 )
                 rules.put(
@@ -823,10 +919,14 @@ object XrayConfigBuilder {
                 )
             }
             RoutingMode.BYPASS_LAN_AND_IR -> {
+                val ipArr = JSONArray().apply {
+                    if (settings.bypassLan) put("geoip:private")
+                    put("geoip:ir")
+                }
                 rules.put(
                     JSONObject()
                         .put("type", "field")
-                        .put("ip", JSONArray().put("geoip:private").put("geoip:ir"))
+                        .put("ip", ipArr)
                         .put("outboundTag", "direct")
                 )
                 rules.put(
@@ -865,7 +965,7 @@ object XrayConfigBuilder {
                     }
                     if (rule.port.isNotBlank()) ruleObj.put("port", rule.port.trim())
                     if (rule.network.isNotBlank()) ruleObj.put("network", rule.network.trim())
-                    if (domainList.isNotEmpty() || ipList.isNotEmpty() || rule.port.isNotBlank()) {
+                    if (domainList.isNotEmpty() || ipList.isNotEmpty() || rule.port.isNotBlank() || rule.network.isNotBlank()) {
                         rules.put(ruleObj)
                     }
                 }
@@ -888,11 +988,7 @@ object XrayConfigBuilder {
                 .put("outboundTag", "proxy")
         )
 
-        val effectiveDomainStrategy = if (isAmir && settings.fakeDnsEnabled) {
-            "AsIs"
-        } else {
-            settings.domainStrategy.ifBlank { "IPIfNonMatch" }
-        }
+        val effectiveDomainStrategy = settings.domainStrategy.ifBlank { "IPIfNonMatch" }
 
         return JSONObject()
             .put("domainStrategy", effectiveDomainStrategy)
