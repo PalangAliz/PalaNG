@@ -33,6 +33,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SNIHostName
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLPeerUnverifiedException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -309,7 +310,6 @@ class AmirLocalProxy(
                     }
                 }
             }
-            runCatching { wsConn.socket.close() }
         }
     }
 
@@ -478,8 +478,7 @@ class AmirLocalProxy(
             rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
 
             val finalSocket: Socket = if (isTls) {
-                val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-                val sslSocket = sslFactory.createSocket(rawSocket, workerHost, workerPort, true) as SSLSocket
+                val sslSocket = tlsSocketFactory.createSocket(rawSocket, workerHost, workerPort, true) as SSLSocket
                 sslSocket.tcpNoDelay = true
                 val sslParams = sslSocket.sslParameters
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isIpLiteral(workerHost)) {
@@ -720,11 +719,22 @@ class AmirLocalProxy(
         private const val WS_MAX_HEADER_BYTES = 14
         private const val IO_BUFFER_SIZE = 65536
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
-        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 15_000
-        private const val DIRECT_CONNECT_TIMEOUT_MS = 15_000
+        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 6_000
+        private const val DIRECT_CONNECT_TIMEOUT_MS = 10_000
         private const val CLEAN_IP_COOLDOWN_MS = 30_000L
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private val random = SecureRandom()
+        private val tlsSocketFactory: SSLSocketFactory by lazy {
+            runCatching {
+                val ctx = SSLContext.getInstance("TLS")
+                ctx.init(null, null, random)
+                ctx.clientSessionContext?.apply {
+                    sessionCacheSize = 64
+                    sessionTimeout = 300
+                }
+                ctx.socketFactory
+            }.getOrElse { SSLSocketFactory.getDefault() as SSLSocketFactory }
+        }
 
         fun deriveKey(uuidBytes: ByteArray, nonce: ByteArray): ByteArray {
             require(uuidBytes.isNotEmpty()) { "UUID cannot be empty" }

@@ -44,7 +44,7 @@ data class AppSettings(
     // VPN Settings
     val enableIpv6: Boolean = false,
     val preferIpv6: Boolean = false,
-    val localDnsEnabled: Boolean = false,
+    val localDnsEnabled: Boolean = true,
     val fakeDnsEnabled: Boolean = false,
     val preAmirLocalDnsEnabled: Boolean? = null,
     val preAmirFakeDnsEnabled: Boolean? = null,
@@ -67,7 +67,7 @@ data class AppSettings(
     val localProxyUsername: String = "",
     val localProxyPassword: String = "",
     val socks5UdpEnabled: Boolean = true,
-    val remoteDns: String = "https://1.1.1.1/dns-query",
+    val remoteDns: String = "https://dns.google/dns-query",
     val domesticDns: String = "223.5.5.5",
     val dnsHosts: String = "",
     val logLevel: String = "warning",

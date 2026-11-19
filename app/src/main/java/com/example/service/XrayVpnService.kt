@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.IpPrefix
 import android.net.ProxyInfo
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -19,6 +20,7 @@ import com.example.R
 import com.example.XrayNgApplication
 import com.example.core.AmirLocalProxy
 import com.example.core.AssetHelper
+import com.example.core.ConfigParser
 import com.example.core.XrayConfigBuilder
 import com.example.data.model.AppSettings
 import com.example.data.model.ProtocolType
@@ -136,13 +138,18 @@ class XrayVpnService : VpnService() {
                     runtimeHttpPort = settings.httpPort
                 }
 
-                val amirPort = if (server.protocol == ProtocolType.AMIR) {
-                    if (!settings.localDnsEnabled && !settings.fakeDnsEnabled) {
-                        VpnStateHolder.appendLog("Note: Amir Worker forwards TCP only; enable Local DNS if UDP DNS queries fail")
+                val isAmir = server.protocol == ProtocolType.AMIR
+                val amirPort = if (isAmir) {
+                    val effectiveRemoteDns = XrayConfigBuilder.resolveEffectiveRemoteDns(settings.remoteDns, isAmir = true)
+                    if (!effectiveRemoteDns.equals(settings.remoteDns.trim(), ignoreCase = true)) {
+                        VpnStateHolder.appendLog(
+                            "Amir DNS guard: ${settings.remoteDns} -> $effectiveRemoteDns (CF Worker blocks 1.1.1.1 & UDP DNS)"
+                        )
                     }
                     val proxy = AmirLocalProxy(
                         serverConfig = server,
                         settings = settings,
+                        resolvedHosts = resolvedHosts,
                         protectSocket = { sock -> protect(sock) },
                         onLog = { msg -> VpnStateHolder.appendLog(msg) }
                     )
@@ -177,7 +184,7 @@ class XrayVpnService : VpnService() {
                 }
 
                 val tunFd = if (settings.vpnMode) {
-                    val pfd = buildTunInterface(server.remarks, settings, runtimeHttpPort)
+                    val pfd = buildTunInterface(server.remarks, settings, runtimeHttpPort, isAmir)
                         ?: error("Failed to establish VPN interface (check VPN permission)")
                     tunInterface = pfd
                     pfd.fd
@@ -269,16 +276,23 @@ class XrayVpnService : VpnService() {
             }
         }
 
-        if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD &&
-            server.protocol != ProtocolType.AMIR &&
+        val isAmir = server.protocol == ProtocolType.AMIR
+        if (isAmir) {
+            val workerUrl = ConfigParser.normalizeAmirWorkerUrl(server.extraParam1.ifBlank { server.address })
+            val workerHost = runCatching { Uri.parse(workerUrl).host.orEmpty() }.getOrDefault("")
+                .ifBlank { server.address.trim() }
+            resolveHostIntoMap(workerHost, "Amir Worker host")
+        } else if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD &&
             server.protocol != ProtocolType.CUSTOM
         ) {
             resolveHostIntoMap(server.address, "outbound host")
         }
 
         // Pre-resolve DoH / DoT / DoQ DNS server hostnames so Xray DNS never hits a self-lookup deadlock
-        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
-            XrayConfigBuilder.extractDnsHost(settings.remoteDns)?.let { dnsHost ->
+        val useInternalDns = settings.localDnsEnabled || settings.fakeDnsEnabled || isAmir
+        if (useInternalDns) {
+            val effectiveRemoteDns = XrayConfigBuilder.resolveEffectiveRemoteDns(settings.remoteDns, isAmir)
+            XrayConfigBuilder.extractDnsHost(effectiveRemoteDns)?.let { dnsHost ->
                 resolveHostIntoMap(dnsHost, "Remote DNS host")
             }
             XrayConfigBuilder.extractDnsHost(settings.domesticDns)?.let { domHost ->
@@ -295,12 +309,15 @@ class XrayVpnService : VpnService() {
         socksPort: Int,
         httpPort: Int
     ) {
+        val isAmir = protocol == ProtocolType.AMIR
+        val useInternalDns = settings.localDnsEnabled || settings.fakeDnsEnabled || isAmir
+        val effectiveRemoteDns = XrayConfigBuilder.resolveEffectiveRemoteDns(settings.remoteDns, isAmir)
         val modeLabel = if (settings.vpnMode) "VPN(mtu=${settings.vpnMtu},addr=${settings.vpnInterfaceAddress})" else "ProxyOnly"
         val dnsLabel = buildString {
-            append("localDns=${settings.localDnsEnabled}")
+            append("localDns=${settings.localDnsEnabled || isAmir}")
             append(",fakeDns=${settings.fakeDnsEnabled}")
-            if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
-                append(",remoteDns=${settings.remoteDns},directDns=${settings.domesticDns}")
+            if (useInternalDns) {
+                append(",remoteDns=$effectiveRemoteDns,directDns=${settings.domesticDns}")
             } else {
                 append(",vpnDns=${settings.vpnDns}")
             }
@@ -350,10 +367,12 @@ class XrayVpnService : VpnService() {
     private fun buildTunInterface(
         sessionName: String,
         settings: AppSettings,
-        effectiveHttpPort: Int
+        effectiveHttpPort: Int,
+        isAmir: Boolean = false
     ): ParcelFileDescriptor? {
         val preset = AppSettings.resolveVpnInterfacePreset(settings.vpnInterfaceAddress)
         val mtu = settings.vpnMtu.coerceIn(1280, 9000)
+        val useInternalDns = settings.localDnsEnabled || settings.fakeDnsEnabled || isAmir
 
         val builder = Builder()
             .setSession(sessionName.ifBlank { "PalaNG" })
@@ -361,7 +380,7 @@ class XrayVpnService : VpnService() {
             .addAddress(preset.clientIp, preset.prefixLength)
 
         val parsedVpnDns = parseVpnDnsServers(settings.vpnDns, settings.enableIpv6)
-        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+        if (useInternalDns) {
             builder.addDnsServer(preset.routerDnsIp)
         } else if (parsedVpnDns.isNotEmpty()) {
             parsedVpnDns.forEach { dns ->
@@ -374,7 +393,7 @@ class XrayVpnService : VpnService() {
 
         if (settings.enableIpv6) {
             builder.addAddress("fd00:10:0:0::2", 126)
-            if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+            if (useInternalDns) {
                 // Use local TUN IPv6 router so Android Private DNS (port 853) does not probe external Cloudflare IPs
                 builder.addDnsServer("fd00:10:0:0::1")
             } else if (parsedVpnDns.none { it.contains(':') }) {
@@ -401,7 +420,7 @@ class XrayVpnService : VpnService() {
                 }
             }
             // Ensure private TUN DNS gateway IP (e.g. 10.10.14.2 / 172.16.0.2) still routes into the TUN
-            if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+            if (useInternalDns) {
                 runCatching {
                     builder.addRoute(preset.routerDnsIp, 32)
                 }

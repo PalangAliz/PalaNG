@@ -698,7 +698,7 @@ fun SettingsScreen(
                                 editDialog = SettingEditTarget(
                                     title = context.getString(R.string.pref_remote_dns_title),
                                     initialValue = settings.remoteDns,
-                                    hint = "https://1.1.1.1/dns-query"
+                                    hint = "https://dns.google/dns-query"
                                 ) { v ->
                                     if (v.isNotBlank()) viewModel.updateSettings { it.copy(remoteDns = v.trim()) }
                                 }
