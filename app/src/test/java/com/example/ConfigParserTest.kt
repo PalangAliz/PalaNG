@@ -109,15 +109,16 @@ class ConfigParserTest {
         assertTrue(root.has("dns"))
         assertTrue(root.has("fakedns"))
         val dns = root.getJSONObject("dns")
-        assertEquals("dns-internal", dns.getString("tag"))
+        assertEquals("dns-module", dns.getString("tag"))
         assertEquals("UseIPv4", dns.getString("queryStrategy"))
         assertTrue(dns.getBoolean("disableFallbackIfMatch"))
         val dnsServers = dns.getJSONArray("servers")
         assertEquals("fakedns", dnsServers.getString(0))
-        // Cloudflare 1.1.1.1 is blocked inside Cloudflare Workers connect(); AMIR guards by switching to dns.google
-        assertEquals("https://dns.google/dns-query", dnsServers.getString(1))
+        // Respects user's configured remoteDns without rewriting 1.1.1.1
+        assertEquals("https://1.1.1.1/dns-query", dnsServers.getString(1))
         val dnsHosts = dns.getJSONObject("hosts")
         assertEquals("8.8.8.8", dnsHosts.getJSONArray("dns.google").getString(0))
+        assertEquals("104.16.248.249", dnsHosts.getJSONArray("cloudflare-dns.com").getString(0))
 
         val tunSniff = root.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
         assertTrue(tunSniff.getBoolean("enabled"))
@@ -125,46 +126,61 @@ class ConfigParserTest {
         assertEquals("fakedns", tunSniff.getJSONArray("destOverride").getString(0))
 
         val routing = root.getJSONObject("routing")
-        // BYPASS_LAN needs no router GeoIP resolution, avoiding IPIfNonMatch pre-connect DNS stalls
         assertEquals("AsIs", routing.getString("domainStrategy"))
         val rules = routing.getJSONArray("rules")
         var dnsOutIndex = -1
-        var virtualRouterDnsBlockIndex = -1
         var dnsDirectIndex = -1
         var dnsProxyIndex = -1
-        var udpBlockIndex = -1
+        var quicBlockIndex = -1
+        var googleProxyIndex = -1
         var hasFakeDnsIpRoute = false
         for (i in 0 until rules.length()) {
             val r = rules.getJSONObject(i)
             if (r.optString("port") == "53" && r.optString("outboundTag") == "dns-out") {
                 dnsOutIndex = i
             }
-            val ips = r.optJSONArray("ip")
-            if (ips != null && ips.optString(0) == "26.26.26.2" && r.optString("outboundTag") == "block") {
-                virtualRouterDnsBlockIndex = i
-            }
             val inboundTag = r.optJSONArray("inboundTag")
-            if (inboundTag != null && inboundTag.optString(0) == "dns-internal") {
-                when (r.optString("outboundTag")) {
-                    "direct" -> dnsDirectIndex = i
-                    "proxy" -> dnsProxyIndex = i
+            if (inboundTag != null) {
+                val firstTag = inboundTag.optString(0)
+                if (firstTag.startsWith("domestic-dns_") && r.optString("outboundTag") == "direct") {
+                    dnsDirectIndex = i
+                } else if (firstTag == "dns-module" && r.optString("outboundTag") == "proxy") {
+                    dnsProxyIndex = i
                 }
             }
-            if (r.optString("network") == "udp" && r.optString("outboundTag") == "block") {
-                udpBlockIndex = i
+            if (r.optString("network") == "udp" && r.optString("port") == "443" && r.optString("outboundTag") == "block") {
+                quicBlockIndex = i
             }
+            val domains = r.optJSONArray("domain")
+            if (domains != null && domains.optString(0) == "geosite:google" && r.optString("outboundTag") == "proxy") {
+                googleProxyIndex = i
+            }
+            val ips = r.optJSONArray("ip")
             if (ips != null && ips.optString(0) == "198.18.0.0/15" && r.optString("outboundTag") == "proxy") {
                 hasFakeDnsIpRoute = true
             }
         }
-        assertTrue("Expected port 53 -> dns-out rule before virtual TUN DNS block", dnsOutIndex in 0 until virtualRouterDnsBlockIndex)
-        assertTrue("Expected dns-internal direct rule before UDP block", dnsDirectIndex in 0 until udpBlockIndex)
-        assertTrue("Expected dns-internal proxy rule before UDP block", dnsProxyIndex in 0 until udpBlockIndex)
+        assertTrue("Expected port 53 -> dns-out rule", dnsOutIndex >= 0)
+        assertTrue("Expected domestic-dns_* direct rule", dnsDirectIndex >= 0)
+        assertTrue("Expected dns-module proxy rule before udp:443 block", dnsProxyIndex in 0 until quicBlockIndex)
+        assertTrue("Expected geosite:google -> proxy rule for AMIR", googleProxyIndex >= 0)
         assertTrue(hasFakeDnsIpRoute)
 
-        val proxyOutbound = root.getJSONArray("outbounds").getJSONObject(0)
+        val outbounds = root.getJSONArray("outbounds")
+        val proxyOutbound = outbounds.getJSONObject(0)
         assertEquals("socks", proxyOutbound.getString("protocol"))
-        assertEquals(40446, proxyOutbound.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getInt("port"))
+        val amirSettings = proxyOutbound.getJSONObject("settings")
+        assertEquals("127.0.0.1", amirSettings.getString("address"))
+        assertEquals(8, amirSettings.getInt("level"))
+        assertEquals(40446, amirSettings.getInt("port"))
+        assertEquals("tcp", proxyOutbound.getJSONObject("streamSettings").getString("network"))
+        assertEquals(-1, proxyOutbound.getJSONObject("mux").getInt("concurrency"))
+        assertFalse(proxyOutbound.getJSONObject("mux").getBoolean("enabled"))
+
+        val directOutbound = outbounds.getJSONObject(1)
+        assertEquals("direct", directOutbound.getString("tag"))
+        assertEquals("tcp", directOutbound.getJSONObject("streamSettings").getString("network"))
+        assertEquals(2, directOutbound.getJSONObject("streamSettings").getJSONObject("sockopt").getJSONObject("happyEyeballs").getInt("interleave"))
     }
 
     @Test
@@ -674,11 +690,15 @@ class ConfigParserTest {
         }
         assertNotNull("Expected Xray 'proxy' SOCKS outbound pointing to standalone AMIR core", proxyOutbound)
         assertEquals("socks", proxyOutbound!!.getString("protocol"))
-        assertFalse("Xray must not attach mux to AMIR SOCKS outbound", proxyOutbound.has("mux"))
-        assertFalse("Xray must not attach streamSettings/dialerProxy to AMIR SOCKS outbound", proxyOutbound.has("streamSettings"))
-        val socksServer = proxyOutbound.getJSONObject("settings").getJSONArray("servers").getJSONObject(0)
-        assertEquals("127.0.0.1", socksServer.getString("address"))
-        assertEquals(40446, socksServer.getInt("port"))
+        assertFalse("Xray must keep mux disabled for AMIR SOCKS outbound", proxyOutbound.getJSONObject("mux").getBoolean("enabled"))
+        assertFalse(
+            "Xray must not attach dialerProxy/fragment sockopt to AMIR SOCKS outbound",
+            proxyOutbound.getJSONObject("streamSettings").has("sockopt")
+        )
+        val proxySettings = proxyOutbound.getJSONObject("settings")
+        assertEquals("127.0.0.1", proxySettings.getString("address"))
+        assertEquals(8, proxySettings.getInt("level"))
+        assertEquals(40446, proxySettings.getInt("port"))
 
         val delayRoot = JSONObject(
             XrayConfigBuilder.buildOutboundDelayTestJson(
@@ -689,7 +709,7 @@ class ConfigParserTest {
         )
         val delayProxy = delayRoot.getJSONArray("outbounds").getJSONObject(0)
         assertEquals("socks", delayProxy.getString("protocol"))
-        assertEquals(41234, delayProxy.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getInt("port"))
+        assertEquals(41234, delayProxy.getJSONObject("settings").getInt("port"))
     }
 
     @Test
@@ -939,51 +959,59 @@ class ConfigParserTest {
     }
 
     @Test
-    fun `AMIR forces internal DNS capture when disabled, avoids CF and UDP DNS, and preserves non-AMIR CF DNS`() {
+    fun `AMIR respects reverted Local and Fake DNS defaults and matches v2rayNG DNS schema when enabled`() {
+        val defaults = AppSettings()
+        assertFalse(defaults.localDnsEnabled)
+        assertFalse(defaults.fakeDnsEnabled)
+        assertEquals("https://1.1.1.1/dns-query", defaults.remoteDns)
+
         val amirServer = ConfigParser.parseSingleUri(
             "amir://63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd@twilight-dream.workers.dev:443?cleanIp=172.67.70.244#AmirNode"
         )!!
-        val amirWithBareIpDns = JSONObject(
+        val amirDefaultRoot = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                server = amirServer,
+                settings = defaults,
+                customRules = emptyList(),
+                amirLocalPort = 40446
+            )
+        )
+        assertFalse("AMIR must not force internal dns block when localDnsEnabled=false and fakeDnsEnabled=false", amirDefaultRoot.has("dns"))
+        assertFalse(amirDefaultRoot.has("fakedns"))
+        val defaultRules = amirDefaultRoot.getJSONObject("routing").getJSONArray("rules")
+        var hasQuicBlock = false
+        for (i in 0 until defaultRules.length()) {
+            val r = defaultRules.getJSONObject(i)
+            if (r.optString("network") == "udp" && r.optString("port") == "443" && r.optString("outboundTag") == "block") {
+                hasQuicBlock = true
+            }
+        }
+        assertTrue("Expected udp:443 QUIC block rule for AMIR", hasQuicBlock)
+
+        // When Local DNS is enabled with BYPASS_LAN_AND_MAINLAND and cloudflare DoH, emit exact v2rayNG structure
+        val amirMainlandDnsRoot = JSONObject(
             XrayConfigBuilder.buildFullConfig(
                 server = amirServer,
                 settings = AppSettings(
-                    vpnMode = true,
-                    localDnsEnabled = false,
+                    localDnsEnabled = true,
                     fakeDnsEnabled = false,
-                    remoteDns = "8.8.8.8",
-                    routingMode = RoutingMode.BYPASS_LAN_AND_IR
+                    routingMode = RoutingMode.BYPASS_LAN_AND_MAINLAND,
+                    remoteDns = "https://cloudflare-dns.com/dns-query"
                 ),
                 customRules = emptyList(),
                 amirLocalPort = 40446
             )
         )
-        assertTrue("AMIR must emit dns config even when localDnsEnabled=false", amirWithBareIpDns.has("dns"))
-        val amirDns = amirWithBareIpDns.getJSONObject("dns")
-        assertTrue(amirDns.getBoolean("disableFallbackIfMatch"))
-        val amirServers = amirDns.getJSONArray("servers")
-        assertEquals("tcp://8.8.8.8", amirServers.getString(0))
-        val domesticObj = amirServers.getJSONObject(1)
-        assertEquals("223.5.5.5", domesticObj.getString("address"))
-        assertTrue(domesticObj.getBoolean("skipFallback"))
-        assertEquals("IPIfNonMatch", amirWithBareIpDns.getJSONObject("routing").getString("domainStrategy"))
-
-        // Non-AMIR protocol keeps user's Cloudflare DoH untouched with bootstrap dns.hosts
-        val vlessServer = ConfigParser.parseSingleUri(
-            "vless://11111111-1111-1111-1111-111111111111@vpn.example.com:443?encryption=none&security=tls&type=tcp#Edge"
-        )!!
-        val vlessRoot = JSONObject(
-            XrayConfigBuilder.buildFullConfig(
-                server = vlessServer,
-                settings = AppSettings(
-                    localDnsEnabled = true,
-                    remoteDns = "https://cloudflare-dns.com/dns-query"
-                ),
-                customRules = emptyList()
-            )
-        )
-        val vlessDns = vlessRoot.getJSONObject("dns")
-        assertEquals("https://cloudflare-dns.com/dns-query", vlessDns.getJSONArray("servers").getString(0))
-        assertEquals("1.1.1.1", vlessDns.getJSONObject("hosts").getJSONArray("cloudflare-dns.com").getString(0))
+        assertTrue(amirMainlandDnsRoot.has("dns"))
+        val dnsObj = amirMainlandDnsRoot.getJSONObject("dns")
+        assertEquals("dns-module", dnsObj.getString("tag"))
+        val serversArr = dnsObj.getJSONArray("servers")
+        assertEquals("https://cloudflare-dns.com/dns-query", serversArr.getString(0))
+        val cnExpectObj = serversArr.getJSONObject(1)
+        assertEquals("223.5.5.5", cnExpectObj.getString("address"))
+        assertEquals("domestic-dns_cn_expect_0", cnExpectObj.getString("tag"))
+        assertTrue(cnExpectObj.getBoolean("skipFallback"))
+        assertEquals("104.16.248.249", dnsObj.getJSONObject("hosts").getJSONArray("cloudflare-dns.com").getString(0))
     }
 
     @Test

@@ -65,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -313,12 +314,12 @@ fun SettingsScreen(
     val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                    scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back_button")) {
@@ -698,7 +699,7 @@ fun SettingsScreen(
                                 editDialog = SettingEditTarget(
                                     title = context.getString(R.string.pref_remote_dns_title),
                                     initialValue = settings.remoteDns,
-                                    hint = "https://dns.google/dns-query"
+                                    hint = "https://1.1.1.1/dns-query"
                                 ) { v ->
                                     if (v.isNotBlank()) viewModel.updateSettings { it.copy(remoteDns = v.trim()) }
                                 }
@@ -1132,7 +1133,7 @@ private fun SettingsSectionCard(
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
         modifier = Modifier.fillMaxWidth()
     ) {

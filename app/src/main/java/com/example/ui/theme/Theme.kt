@@ -9,72 +9,76 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.example.data.model.ThemeMode
 
+val LocalIsDarkTheme = staticCompositionLocalOf { false }
+
 private val DarkColorScheme = darkColorScheme(
-    primary = TealGlacial,
-    onPrimary = Color(0xFF03201E),
-    primaryContainer = TealContainerDark,
-    onPrimaryContainer = Color(0xFF99F6E4),
-    secondary = AzureAccent,
-    onSecondary = Color(0xFF041D2E),
-    secondaryContainer = Color(0xFF0F2942),
-    onSecondaryContainer = Color(0xFFBAE6FD),
+    primary = PantherGoldLight,
+    onPrimary = Color(0xFF261600),
+    primaryContainer = PantherGoldContainerDark,
+    onPrimaryContainer = Color(0xFFFFDDB0),
+    secondary = PumpkinYellow,
+    onSecondary = Color(0xFF211300),
+    secondaryContainer = PumpkinSoftDark,
+    onSecondaryContainer = Color(0xFFFFD699),
     tertiary = EmeraldConnected,
     onTertiary = Color(0xFF032318),
     background = Obsidian950,
-    onBackground = Color(0xFFEAF0F7),
+    onBackground = Color(0xFFF1F4F9),
     surface = Obsidian900,
-    onSurface = Color(0xFFEAF0F7),
+    onSurface = Color(0xFFF1F4F9),
     surfaceVariant = Obsidian800,
-    onSurfaceVariant = Color(0xFF93A4BD),
+    onSurfaceVariant = Color(0xFF9EA8BC),
     surfaceContainerLowest = Obsidian950,
     surfaceContainerLow = Obsidian900,
     surfaceContainer = Obsidian850,
     surfaceContainerHigh = Obsidian800,
     surfaceContainerHighest = Obsidian700,
-    outline = Color(0xFF33435E),
-    outlineVariant = Color(0xFF1D293D),
+    outline = Color(0xFF343E52),
+    outlineVariant = Color(0xFF232A3A),
     error = CoralError,
     onError = Color.White
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = TealDeep,
+    primary = PantherInk,
     onPrimary = Color.White,
-    primaryContainer = TealContainerLight,
-    onPrimaryContainer = Color(0xFF042F2E),
-    secondary = AzureDeep,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE0F2FE),
-    onSecondaryContainer = Color(0xFF082F49),
+    primaryContainer = PantherInkContainer,
+    onPrimaryContainer = Color(0xFF11151E),
+    secondary = PumpkinYellow,
+    onSecondary = Color(0xFF241500),
+    secondaryContainer = PumpkinSoftLight,
+    onSecondaryContainer = Color(0xFF4D2900),
     tertiary = EmeraldConnected,
     onTertiary = Color.White,
-    background = SurfaceNeutralLow,
-    onBackground = Color(0xFF0F172A),
+    background = SurfaceWhite,
+    onBackground = Color(0xFF141821),
     surface = SurfaceWhite,
-    onSurface = Color(0xFF0F172A),
+    onSurface = Color(0xFF141821),
     surfaceVariant = SurfaceNeutralHigh,
-    onSurfaceVariant = Color(0xFF475569),
+    onSurfaceVariant = Color(0xFF525E72),
     surfaceContainerLowest = SurfaceWhite,
-    surfaceContainerLow = SurfaceWhite,
+    surfaceContainerLow = SurfaceNeutralCard,
     surfaceContainer = SurfaceNeutralHigh,
-    surfaceContainerHigh = Color(0xFFDCE4EE),
-    surfaceContainerHighest = Color(0xFFCFD9E6),
-    outline = Color(0xFFCBD5E1),
-    outlineVariant = Color(0xFFE2E8F0),
+    surfaceContainerHigh = Color(0xFFE7ECF2),
+    surfaceContainerHighest = Color(0xFFDCE2EB),
+    outline = Color(0xFFCBD2DE),
+    outlineVariant = Color(0xFFE3E7EE),
     error = Color(0xFFDC2626),
     onError = Color.White
 )
 
 @Composable
 fun XrayNgTheme(
-    themeMode: ThemeMode = ThemeMode.DARK,
+    themeMode: ThemeMode = ThemeMode.LIGHT,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -104,9 +108,11 @@ fun XrayNgTheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalIsDarkTheme provides useDark) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }

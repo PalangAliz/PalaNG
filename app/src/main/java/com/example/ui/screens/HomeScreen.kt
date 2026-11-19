@@ -138,6 +138,9 @@ import com.example.ui.theme.BrandCanvasDark
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldConnected
 import com.example.ui.theme.IndigoProtocol
+import com.example.ui.theme.LocalIsDarkTheme
+import com.example.ui.theme.PumpkinYellow
+import com.example.ui.theme.PumpkinYellowDeep
 import com.example.ui.theme.PurpleReality
 import com.example.ui.theme.TealProtocol
 import kotlinx.coroutines.launch
@@ -282,16 +285,16 @@ fun HomeScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                            border = BorderStroke(1.25.dp, PumpkinYellow.copy(alpha = 0.7f)),
                             color = BrandCanvasDark,
                             shadowElevation = 4.dp
                         ) {
                             Image(
-                                painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
+                                painter = painterResource(id = R.drawable.ic_palang_logo),
                                 contentDescription = "PalaNG logo",
                                 modifier = Modifier
                                     .size(54.dp)
-                                    .clip(RoundedCornerShape(14.dp))
+                                    .padding(5.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(14.dp))
@@ -307,7 +310,7 @@ fun HomeScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Surface(
-                                    color = TealProtocol.copy(alpha = 0.18f),
+                                    color = PumpkinYellow.copy(alpha = 0.22f),
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
                                     Text(
@@ -315,7 +318,7 @@ fun HomeScreen(
                                         style = MaterialTheme.typography.labelSmall,
                                         letterSpacing = 1.2.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF5EEAD4),
+                                        color = PumpkinYellow,
                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                     )
                                 }
@@ -451,14 +454,14 @@ fun HomeScreen(
         }
     ) {
         Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 Column {
                     TopAppBar(
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
                         ),
                         navigationIcon = {
                             IconButton(
@@ -477,16 +480,16 @@ fun HomeScreen(
                                     shape = RoundedCornerShape(10.dp),
                                     color = BrandCanvasDark,
                                     border = BorderStroke(
-                                        1.dp,
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
+                                        1.25.dp,
+                                        PumpkinYellow.copy(alpha = 0.75f)
                                     )
                                 ) {
                                     Image(
-                                        painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
+                                        painter = painterResource(id = R.drawable.ic_palang_logo),
                                         contentDescription = "PalaNG emblem",
                                         modifier = Modifier
-                                            .size(34.dp)
-                                            .clip(RoundedCornerShape(10.dp))
+                                            .size(36.dp)
+                                            .padding(3.dp)
                                     )
                                 }
                                 Column {
@@ -908,9 +911,9 @@ private fun ServerProfileCard(
         label = "indicatorColor"
     )
     val cardContainer = when {
-        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh
-        isSelected -> MaterialTheme.colorScheme.surfaceContainer
-        else -> MaterialTheme.colorScheme.surfaceContainerLow
+        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f)
+        isSelected -> MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f)
+        else -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)
     }
     val cardBorder = BorderStroke(
         width = if (isSelected || isConnected) 1.25.dp else 1.dp,
@@ -1033,26 +1036,32 @@ private fun ServerProfileCard(
 
 @Composable
 private fun ProtocolBadge(protocol: ProtocolType) {
+    val isDark = LocalIsDarkTheme.current
     val accent = when (protocol) {
-        ProtocolType.AMIR -> TealProtocol
+        ProtocolType.AMIR -> PumpkinYellow
         ProtocolType.VLESS -> IndigoProtocol
         ProtocolType.VMESS -> BlueProtocol
         ProtocolType.TROJAN -> AmberLatency
         ProtocolType.WIREGUARD -> EmeraldConnected
         ProtocolType.HYSTERIA2 -> PurpleReality
-        ProtocolType.SHADOWSOCKS -> MaterialTheme.colorScheme.secondary
+        ProtocolType.SHADOWSOCKS -> TealProtocol
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val isAccentStrong = protocol == ProtocolType.AMIR
+    val textColor = if (isAccentStrong) {
+        if (isDark) PumpkinYellow else PumpkinYellowDeep
+    } else {
+        accent
+    }
     Surface(
         color = accent.copy(alpha = if (isAccentStrong) 0.16f else 0.11f),
         shape = RoundedCornerShape(6.dp),
-        border = BorderStroke(0.75.dp, accent.copy(alpha = if (isAccentStrong) 0.48f else 0.3f))
+        border = BorderStroke(0.75.dp, accent.copy(alpha = if (isAccentStrong) 0.55f else 0.3f))
     ) {
         Text(
             text = protocol.displayName.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = if (isAccentStrong) MaterialTheme.colorScheme.primary else accent,
+            color = textColor,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
         )
@@ -1119,9 +1128,9 @@ private fun CompactServerGridCard(
         label = "gridIndicatorColor"
     )
     val cardContainer = when {
-        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh
-        isSelected -> MaterialTheme.colorScheme.surfaceContainer
-        else -> MaterialTheme.colorScheme.surfaceContainerLow
+        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f)
+        isSelected -> MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f)
+        else -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)
     }
     val cardBorder = BorderStroke(
         width = if (isSelected || isConnected) 1.25.dp else 1.dp,
@@ -1354,7 +1363,7 @@ private fun VpnBottomControlDock(
     )
 
     Surface(
-        color = MaterialTheme.colorScheme.surface,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
         border = BorderStroke(
             width = 1.dp,
@@ -1482,11 +1491,16 @@ private fun VpnBottomControlDock(
                 }
             }
 
+            val fabContentColor = when (connectionState) {
+                ConnectionState.CONNECTED -> Color.White
+                ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> Color(0xFF211300)
+                ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onPrimary
+            }
             FloatingActionButton(
                 onClick = onToggleConnect,
                 shape = RoundedCornerShape(16.dp),
                 containerColor = fabContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+                contentColor = fabContentColor,
                 elevation = FloatingActionButtonDefaults.elevation(
                     defaultElevation = 2.dp,
                     pressedElevation = 4.dp
@@ -1500,7 +1514,7 @@ private fun VpnBottomControlDock(
                     isBusy -> CircularProgressIndicator(
                         modifier = Modifier.size(22.dp),
                         strokeWidth = 2.5.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                        color = fabContentColor
                     )
                     isConnected -> Icon(
                         imageVector = Icons.Outlined.Stop,
@@ -1524,7 +1538,7 @@ private fun EmptyProfilesState(
     onScanQr: () -> Unit,
     onManualAdd: () -> Unit
 ) {
-    val glowColor = MaterialTheme.colorScheme.primary
+    val glowColor = PumpkinYellow
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1539,7 +1553,7 @@ private fun EmptyProfilesState(
                 .drawBehind {
                     drawCircle(
                         brush = Brush.radialGradient(
-                            colors = listOf(glowColor.copy(alpha = 0.24f), Color.Transparent)
+                            colors = listOf(glowColor.copy(alpha = 0.28f), Color.Transparent)
                         ),
                         radius = size.maxDimension * 0.72f
                     )
@@ -1548,15 +1562,15 @@ private fun EmptyProfilesState(
             Surface(
                 shape = RoundedCornerShape(24.dp),
                 color = BrandCanvasDark,
-                border = BorderStroke(1.25.dp, glowColor.copy(alpha = 0.45f)),
+                border = BorderStroke(1.5.dp, glowColor.copy(alpha = 0.68f)),
                 shadowElevation = 6.dp
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
+                    painter = painterResource(id = R.drawable.ic_palang_logo),
                     contentDescription = "PalaNG logo",
                     modifier = Modifier
                         .size(92.dp)
-                        .clip(RoundedCornerShape(24.dp))
+                        .padding(8.dp)
                 )
             }
         }

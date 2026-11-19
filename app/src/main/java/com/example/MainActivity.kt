@@ -29,6 +29,7 @@ import androidx.navigation.toRoute
 import com.example.data.model.LanguageMode
 import com.example.service.ConnectionState
 import com.example.ui.MainViewModel
+import com.example.ui.components.PalangBackdrop
 import com.example.ui.navigation.AppRoute
 import com.example.ui.screens.AboutScreen
 import com.example.ui.screens.AssetsScreen
@@ -147,10 +148,11 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    NavHost(
-                        navController = navController,
-                        startDestination = AppRoute.Home
-                    ) {
+                    PalangBackdrop {
+                        NavHost(
+                            navController = navController,
+                            startDestination = AppRoute.Home
+                        ) {
                         composable<AppRoute.Home> {
                             HomeScreen(
                                 viewModel = viewModel,
@@ -239,6 +241,7 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 onBack = { navController.popBackStack() }
                             )
+                        }
                         }
                     }
                 }

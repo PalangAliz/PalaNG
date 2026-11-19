@@ -47,6 +47,7 @@ import com.example.BuildConfig
 import com.example.R
 import com.example.ui.MainViewModel
 import com.example.ui.theme.BrandCanvasDark
+import com.example.ui.theme.PumpkinYellow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,13 +55,13 @@ fun AboutScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
-    val primaryGlow = MaterialTheme.colorScheme.primary
+    val primaryGlow = PumpkinYellow
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("about_back_button")) {
@@ -97,15 +98,15 @@ fun AboutScreen(
                 Surface(
                     shape = RoundedCornerShape(26.dp),
                     color = BrandCanvasDark,
-                    border = BorderStroke(1.5.dp, primaryGlow.copy(alpha = 0.45f)),
+                    border = BorderStroke(1.75.dp, primaryGlow.copy(alpha = 0.72f)),
                     shadowElevation = 6.dp
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
+                        painter = painterResource(id = R.drawable.ic_palang_logo),
                         contentDescription = "PalaNG Icon",
                         modifier = Modifier
                             .size(96.dp)
-                            .clip(RoundedCornerShape(26.dp))
+                            .padding(8.dp)
                     )
                 }
             }
@@ -151,7 +152,9 @@ fun AboutScreen(
 
             Card(
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)
+                ),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {

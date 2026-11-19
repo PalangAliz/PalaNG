@@ -129,7 +129,7 @@ class SettingsDataStore(private val context: Context) {
 
             enableIpv6 = prefs[Keys.ENABLE_IPV6] ?: preferIpv6,
             preferIpv6 = preferIpv6,
-            localDnsEnabled = prefs[Keys.LOCAL_DNS_ENABLED] ?: true,
+            localDnsEnabled = prefs[Keys.LOCAL_DNS_ENABLED] ?: false,
             fakeDnsEnabled = prefs[Keys.FAKE_DNS_ENABLED] ?: false,
             preAmirLocalDnsEnabled = preLocal,
             preAmirFakeDnsEnabled = preFake,
@@ -152,7 +152,7 @@ class SettingsDataStore(private val context: Context) {
             localProxyUsername = prefs[Keys.LOCAL_PROXY_USERNAME] ?: "",
             localProxyPassword = prefs[Keys.LOCAL_PROXY_PASSWORD] ?: "",
             socks5UdpEnabled = prefs[Keys.SOCKS5_UDP_ENABLED] ?: true,
-            remoteDns = prefs[Keys.REMOTE_DNS] ?: "https://dns.google/dns-query",
+            remoteDns = prefs[Keys.REMOTE_DNS] ?: "https://1.1.1.1/dns-query",
             domesticDns = prefs[Keys.DOMESTIC_DNS] ?: "223.5.5.5",
             dnsHosts = prefs[Keys.DNS_HOSTS] ?: "",
             logLevel = prefs[Keys.LOG_LEVEL] ?: "warning",
