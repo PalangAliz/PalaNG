@@ -41,6 +41,7 @@ class AmirLocalProxy(
     private val serverConfig: ServerConfig,
     private val settings: AppSettings = AppSettings(),
     private val resolvedHosts: Map<String, List<String>> = emptyMap(),
+    private val xrayUpstreamPort: Int = 0,
     private val protectSocket: (Socket) -> Boolean = { true },
     private val onLog: (String) -> Unit = {}
 ) {
@@ -97,6 +98,7 @@ class AmirLocalProxy(
         emitInfo(
             "Amir local SOCKS5 listening on 127.0.0.1:$boundPort -> $workerHost" +
                 (if (cleanIp.isNotBlank()) " (CF Clean IP: $cleanIp)" else "") +
+                (if (xrayUpstreamPort > 0) " [via Xray:$xrayUpstreamPort]" else "") +
                 if (settings.fragmentEnabled && isTls) " [Fragment ${settings.fragmentLength}]" else ""
         )
 
@@ -461,13 +463,21 @@ class AmirLocalProxy(
         activeSockets.add(rawSocket)
         try {
             rawSocket.tcpNoDelay = true // Forces SocketImpl FD creation before protect()
-            protectSocket(rawSocket)
-            val resolvedAddr = resolveConnectAddress(connectTarget)
-            rawSocket.connect(InetSocketAddress(resolvedAddr, workerPort), connectTimeoutMs)
-            rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
+            val resolvedAddr = runCatching { resolveConnectAddress(connectTarget) }.getOrNull()
+            if (xrayUpstreamPort > 0) {
+                rawSocket.connect(InetSocketAddress("127.0.0.1", xrayUpstreamPort), connectTimeoutMs)
+                rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
+                openSocks5Tunnel(rawSocket, resolvedAddr, connectTarget, workerPort)
+            } else {
+                val targetAddr = resolvedAddr ?: InetAddress.getByName(connectTarget)
+                protectSocket(rawSocket)
+                rawSocket.connect(InetSocketAddress(targetAddr, workerPort), connectTimeoutMs)
+                rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
+            }
 
             val finalSocket: Socket = if (isTls) {
-                val baseSocketForTls: Socket = if (settings.fragmentEnabled) {
+                val useJavaFragment = settings.fragmentEnabled && xrayUpstreamPort <= 0
+                val baseSocketForTls: Socket = if (useJavaFragment) {
                     if (loggedFragmentActive.compareAndSet(false, true)) {
                         emitInfo("Amir TLS Fragment active (packets=${settings.fragmentPackets}, length=${settings.fragmentLength}, interval=${settings.fragmentInterval})")
                     }
@@ -479,6 +489,9 @@ class AmirLocalProxy(
                         maxSplit = parseRangePair(settings.fragmentMaxSplit, 10, 10).second.coerceIn(1, 64)
                     )
                 } else {
+                    if (settings.fragmentEnabled && loggedFragmentActive.compareAndSet(false, true)) {
+                        emitInfo("Amir TLS Fragment delegated to Xray core (packets=${settings.fragmentPackets}, length=${settings.fragmentLength})")
+                    }
                     rawSocket
                 }
                 val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
@@ -487,6 +500,9 @@ class AmirLocalProxy(
                 val sslParams = sslSocket.sslParameters
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isIpLiteral(workerHost)) {
                     sslParams.serverNames = listOf(SNIHostName(workerHost))
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    sslParams.applicationProtocols = arrayOf("http/1.1")
                 }
                 sslParams.endpointIdentificationAlgorithm = "HTTPS"
                 sslSocket.sslParameters = sslParams
@@ -553,6 +569,61 @@ class AmirLocalProxy(
             runCatching { socketToTrack.close() }
             runCatching { rawSocket.close() }
             throw t
+        }
+    }
+
+    private fun openSocks5Tunnel(
+        socket: Socket,
+        resolvedAddr: InetAddress?,
+        fallbackHost: String,
+        port: Int
+    ) {
+        val out = socket.getOutputStream()
+        val inp = socket.getInputStream()
+
+        out.write(byteArrayOf(0x05, 0x01, 0x00))
+        out.flush()
+        val greeting = readExactBytes(inp, 2)
+        if (greeting[0].toInt() != 5 || greeting[1].toInt() != 0) {
+            throw IOException("Xray upstream SOCKS5 greeting rejected: ${greeting[1].toInt() and 0xFF}")
+        }
+
+        val addrPayload: ByteArray = when (resolvedAddr) {
+            is Inet4Address -> byteArrayOf(0x01) + resolvedAddr.address
+            is Inet6Address -> byteArrayOf(0x04) + resolvedAddr.address
+            else -> {
+                val hostBytes = fallbackHost.trim().removePrefix("[").removeSuffix("]")
+                    .toByteArray(StandardCharsets.UTF_8)
+                byteArrayOf(0x03, hostBytes.size.toByte()) + hostBytes
+            }
+        }
+        val req = ByteArray(3 + addrPayload.size + 2)
+        req[0] = 0x05
+        req[1] = 0x01 // CONNECT
+        req[2] = 0x00
+        System.arraycopy(addrPayload, 0, req, 3, addrPayload.size)
+        req[3 + addrPayload.size] = ((port ushr 8) and 0xFF).toByte()
+        req[4 + addrPayload.size] = (port and 0xFF).toByte()
+        out.write(req)
+        out.flush()
+
+        val respHead = readExactBytes(inp, 4)
+        if (respHead[0].toInt() != 5) {
+            throw IOException("Invalid SOCKS5 response version from Xray upstream")
+        }
+        val rep = respHead[1].toInt() and 0xFF
+        if (rep != 0) {
+            throw IOException("Xray upstream SOCKS5 dial failed (REP=$rep)")
+        }
+        val bndAtyp = respHead[3].toInt() and 0xFF
+        when (bndAtyp) {
+            1 -> readExactBytes(inp, 4 + 2)
+            4 -> readExactBytes(inp, 16 + 2)
+            3 -> {
+                val len = readExactBytes(inp, 1)[0].toInt() and 0xFF
+                readExactBytes(inp, len + 2)
+            }
+            else -> throw IOException("Unsupported SOCKS5 bind atyp=$bndAtyp")
         }
     }
 

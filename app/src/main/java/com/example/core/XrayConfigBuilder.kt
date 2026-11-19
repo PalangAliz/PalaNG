@@ -15,6 +15,7 @@ object XrayConfigBuilder {
         settings: AppSettings,
         customRules: List<RoutingRule>,
         amirLocalPort: Int = 0,
+        amirXrayUpstreamPort: Int = 0,
         resolvedServerHosts: Map<String, List<String>> = emptyMap(),
         runtimeSocksPort: Int? = null,
         runtimeHttpPort: Int? = null
@@ -27,15 +28,15 @@ object XrayConfigBuilder {
         root.put("log", JSONObject().put("loglevel", settings.logLevel))
         root.put("stats", JSONObject())
         root.put("policy", buildPolicy())
-        root.put("inbounds", buildInbounds(settings, runtimeSocksPort, runtimeHttpPort))
-        root.put("outbounds", buildOutbounds(server, settings, amirLocalPort))
+        root.put("inbounds", buildInbounds(settings, runtimeSocksPort, runtimeHttpPort, amirXrayUpstreamPort))
+        root.put("outbounds", buildOutbounds(server, settings, amirLocalPort, amirXrayUpstreamPort))
 
         val isAmir = server.protocol == ProtocolType.AMIR
         val hostsObj = buildDnsHostsObject(settings.dnsHosts, resolvedServerHosts)
         if (settings.localDnsEnabled || settings.fakeDnsEnabled || hostsObj.length() > 0) {
             root.put("dns", buildDns(settings, isAmir, hostsObj))
         }
-        root.put("routing", buildRouting(settings, customRules, isAmir))
+        root.put("routing", buildRouting(settings, customRules, isAmir, amirXrayUpstreamPort))
 
         if (settings.fakeDnsEnabled) {
             val fakeDnsArr = JSONArray().put(
@@ -85,14 +86,18 @@ object XrayConfigBuilder {
         return root.toString(2)
     }
 
-    fun buildOutboundDelayTestJson(server: ServerConfig, settings: AppSettings): String {
+    fun buildOutboundDelayTestJson(
+        server: ServerConfig,
+        settings: AppSettings,
+        amirLocalPort: Int = 0
+    ): String {
         if (server.protocol == ProtocolType.CUSTOM && server.rawCustomJson.isNotBlank()) {
             return server.rawCustomJson
         }
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "none"))
         val outbounds = JSONArray()
-        outbounds.put(buildProxyOutbound(server, settings))
+        outbounds.put(buildProxyOutbound(server, settings, amirLocalPort))
         if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
             outbounds.put(buildFragmentOutbound(settings))
         }
@@ -196,7 +201,8 @@ object XrayConfigBuilder {
     private fun buildInbounds(
         settings: AppSettings,
         runtimeSocksPort: Int? = null,
-        runtimeHttpPort: Int? = null
+        runtimeHttpPort: Int? = null,
+        amirXrayUpstreamPort: Int = 0
     ): JSONArray {
         val inbounds = JSONArray()
         val listenHost = if (settings.allowLan) "0.0.0.0" else "127.0.0.1"
@@ -253,6 +259,24 @@ object XrayConfigBuilder {
                 }
             )
         }
+
+        if (amirXrayUpstreamPort > 0) {
+            inbounds.put(
+                JSONObject().apply {
+                    put("tag", "amir-upstream")
+                    put("port", amirXrayUpstreamPort)
+                    put("listen", "127.0.0.1")
+                    put("protocol", "socks")
+                    put(
+                        "settings",
+                        JSONObject()
+                            .put("auth", "noauth")
+                            .put("udp", false)
+                            .put("userLevel", 8)
+                    )
+                }
+            )
+        }
         return inbounds
     }
 
@@ -299,12 +323,26 @@ object XrayConfigBuilder {
     private fun buildOutbounds(
         server: ServerConfig,
         settings: AppSettings,
-        amirLocalPort: Int = 0
+        amirLocalPort: Int = 0,
+        amirXrayUpstreamPort: Int = 0
     ): JSONArray {
         val outbounds = JSONArray()
         outbounds.put(buildProxyOutbound(server, settings, amirLocalPort))
-        if (settings.fragmentEnabled && server.protocol != ProtocolType.WIREGUARD && server.protocol != ProtocolType.AMIR) {
+        val allowAmirXrayFragment = server.protocol == ProtocolType.AMIR && amirXrayUpstreamPort > 0
+        if (settings.fragmentEnabled && (server.protocol != ProtocolType.WIREGUARD && (server.protocol != ProtocolType.AMIR || allowAmirXrayFragment))) {
             outbounds.put(buildFragmentOutbound(settings))
+        }
+        if (amirXrayUpstreamPort > 0) {
+            outbounds.put(
+                JSONObject().apply {
+                    put("tag", "amir-out")
+                    put("protocol", "freedom")
+                    put(
+                        "streamSettings",
+                        JSONObject().put("sockopt", buildOutboundSockopt(settings, allowFragment = true))
+                    )
+                }
+            )
         }
         val directDomainStrategy = resolveSockoptDomainStrategy(settings)
         outbounds.put(
@@ -830,9 +868,19 @@ object XrayConfigBuilder {
     private fun buildRouting(
         settings: AppSettings,
         customRules: List<RoutingRule>,
-        isAmir: Boolean = false
+        isAmir: Boolean = false,
+        amirXrayUpstreamPort: Int = 0
     ): JSONObject {
         val rules = JSONArray()
+
+        if (amirXrayUpstreamPort > 0) {
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("inboundTag", JSONArray().put("amir-upstream"))
+                    .put("outboundTag", "amir-out")
+            )
+        }
 
         if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
             val dnsInboundTags = JSONArray().apply {

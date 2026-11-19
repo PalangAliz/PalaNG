@@ -123,6 +123,28 @@ class XrayVpnService : VpnService() {
                 // Resolve outbound server & DoH hostnames before VPN interface starts
                 val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
 
+                // Allocate ephemeral ports when Dynamic Local Proxy Port is enabled
+                val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
+                val runtimeSocksPort: Int
+                val runtimeHttpPort: Int
+                if (effectiveLocalProxy && settings.dynamicProxyPortEnabled) {
+                    runtimeSocksPort = allocateFreePort(fallback = settings.socksPort)
+                    runtimeHttpPort = allocateFreePort(fallback = settings.httpPort, excludePorts = setOf(runtimeSocksPort))
+                    VpnStateHolder.appendLog("Dynamic local proxy ports allocated: SOCKS=$runtimeSocksPort, HTTP=$runtimeHttpPort")
+                } else {
+                    runtimeSocksPort = settings.socksPort
+                    runtimeHttpPort = settings.httpPort
+                }
+
+                val amirXrayUpstreamPort = if (server.protocol == ProtocolType.AMIR) {
+                    allocateFreePort(
+                        fallback = 40447,
+                        excludePorts = setOf(runtimeSocksPort, runtimeHttpPort)
+                    )
+                } else {
+                    0
+                }
+
                 val amirPort = if (server.protocol == ProtocolType.AMIR) {
                     if (!settings.localDnsEnabled && !settings.fakeDnsEnabled) {
                         VpnStateHolder.appendLog("Note: Amir Worker forwards TCP only; enable Local DNS if UDP DNS queries fail")
@@ -131,6 +153,7 @@ class XrayVpnService : VpnService() {
                         serverConfig = server,
                         settings = settings,
                         resolvedHosts = resolvedHosts,
+                        xrayUpstreamPort = amirXrayUpstreamPort,
                         protectSocket = { sock -> protect(sock) },
                         onLog = { msg -> VpnStateHolder.appendLog(msg) }
                     )
@@ -138,19 +161,6 @@ class XrayVpnService : VpnService() {
                     proxy.start()
                 } else {
                     0
-                }
-
-                // Allocate ephemeral ports when Dynamic Local Proxy Port is enabled
-                val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
-                val runtimeSocksPort: Int
-                val runtimeHttpPort: Int
-                if (effectiveLocalProxy && settings.dynamicProxyPortEnabled) {
-                    runtimeSocksPort = allocateFreePort(fallback = settings.socksPort)
-                    runtimeHttpPort = allocateFreePort(fallback = settings.httpPort, excludePort = runtimeSocksPort)
-                    VpnStateHolder.appendLog("Dynamic local proxy ports allocated: SOCKS=$runtimeSocksPort, HTTP=$runtimeHttpPort")
-                } else {
-                    runtimeSocksPort = settings.socksPort
-                    runtimeHttpPort = settings.httpPort
                 }
 
                 VpnStateHolder.setActiveProxy(
@@ -168,6 +178,7 @@ class XrayVpnService : VpnService() {
                     settings = settings,
                     customRules = rules,
                     amirLocalPort = amirPort,
+                    amirXrayUpstreamPort = amirXrayUpstreamPort,
                     resolvedServerHosts = resolvedHosts,
                     runtimeSocksPort = runtimeSocksPort,
                     runtimeHttpPort = runtimeHttpPort
@@ -223,18 +234,20 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun allocateFreePort(fallback: Int, excludePort: Int = -1): Int {
-        repeat(4) {
+    private fun allocateFreePort(fallback: Int, excludePorts: Set<Int> = emptySet()): Int {
+        repeat(6) {
             runCatching {
                 ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { sock ->
                     val port = sock.localPort
-                    if (port in 1024..65535 && port != excludePort) {
+                    if (port in 1024..65535 && port !in excludePorts) {
                         return port
                     }
                 }
             }
         }
-        return if (fallback != excludePort) fallback else (fallback + 1).coerceAtMost(65535)
+        var candidate = fallback
+        while (candidate in excludePorts && candidate < 65535) candidate++
+        return candidate
     }
 
     private fun resolveServerAddressForDnsHosts(

@@ -225,7 +225,7 @@ fun ProfileEditScreen(
                         .testTag("edit_amir_uuid")
                 )
                 Text(
-                    text = "Note: Enable Local DNS and Enable Fake DNS will be turned on automatically when connecting to an Amir config, and restored afterward.",
+                    text = "Amir connects through Xray-core's DNS, routing, and optional Fragment engine. Enabling Local DNS and FakeDNS in Settings is recommended.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

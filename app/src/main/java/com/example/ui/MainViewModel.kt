@@ -444,12 +444,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun measureServerDelayInternal(server: ServerConfig, settings: AppSettings): Long {
-        return if (server.protocol == ProtocolType.AMIR) {
-            AmirLocalProxy(serverConfig = server, settings = settings).measureDelay(settings.delayTestUrl)
-        } else {
-            val configJson = XrayConfigBuilder.buildOutboundDelayTestJson(server, settings)
-            AssetHelper.measureOutboundDelay(app, configJson, settings.delayTestUrl)
+        if (server.protocol == ProtocolType.AMIR) {
+            val proxy = AmirLocalProxy(serverConfig = server, settings = settings)
+            val localPort = runCatching { proxy.start() }.getOrElse { return -1L }
+            return try {
+                val configJson = XrayConfigBuilder.buildOutboundDelayTestJson(server, settings, amirLocalPort = localPort)
+                AssetHelper.measureOutboundDelay(app, configJson, settings.delayTestUrl)
+            } finally {
+                runCatching { proxy.stop() }
+            }
         }
+        val configJson = XrayConfigBuilder.buildOutboundDelayTestJson(server, settings)
+        return AssetHelper.measureOutboundDelay(app, configJson, settings.delayTestUrl)
     }
 
     fun testAllVisibleDelay() {

@@ -616,4 +616,226 @@ class ConfigParserTest {
             serverSock.close()
         }
     }
+
+    @Test
+    fun `Amir full config routes upstream through Xray-core amir-upstream and amir-out with Fragment`() {
+        val amirServer = ConfigParser.parseSingleUri(
+            "amir://63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd@twilight-dream.workers.dev:443?cleanIp=172.67.70.244#AmirXray"
+        )!!
+        val settings = AppSettings(
+            vpnMode = true,
+            localDnsEnabled = true,
+            fakeDnsEnabled = true,
+            fragmentEnabled = true,
+            fragmentPackets = "tlshello",
+            fragmentLength = "80-160",
+            outboundDomainResolve = AppSettings.OUTBOUND_USE_IPV4
+        )
+        val root = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                server = amirServer,
+                settings = settings,
+                customRules = emptyList(),
+                amirLocalPort = 40446,
+                amirXrayUpstreamPort = 40447
+            )
+        )
+
+        val inbounds = root.getJSONArray("inbounds")
+        var foundUpstreamInbound = false
+        for (i in 0 until inbounds.length()) {
+            val ib = inbounds.getJSONObject(i)
+            if (ib.optString("tag") == "amir-upstream") {
+                foundUpstreamInbound = true
+                assertEquals("socks", ib.getString("protocol"))
+                assertEquals("127.0.0.1", ib.getString("listen"))
+                assertEquals(40447, ib.getInt("port"))
+            }
+        }
+        assertTrue("Expected amir-upstream inbound in Xray config", foundUpstreamInbound)
+
+        val outbounds = root.getJSONArray("outbounds")
+        var hasFragmentOutbound = false
+        var amirOutSockopt: JSONObject? = null
+        for (i in 0 until outbounds.length()) {
+            val ob = outbounds.getJSONObject(i)
+            when (ob.optString("tag")) {
+                "fragment" -> hasFragmentOutbound = true
+                "amir-out" -> {
+                    assertEquals("freedom", ob.getString("protocol"))
+                    amirOutSockopt = ob.getJSONObject("streamSettings").getJSONObject("sockopt")
+                }
+            }
+        }
+        assertTrue("Expected Xray fragment outbound when fragmentEnabled=true", hasFragmentOutbound)
+        assertNotNull("Expected amir-out freedom outbound", amirOutSockopt)
+        assertEquals("UseIPv4", amirOutSockopt!!.getString("domainStrategy"))
+        assertEquals("fragment", amirOutSockopt.getString("dialerProxy"))
+
+        val firstRule = root.getJSONObject("routing").getJSONArray("rules").getJSONObject(0)
+        assertEquals("amir-upstream", firstRule.getJSONArray("inboundTag").getString(0))
+        assertEquals("amir-out", firstRule.getString("outboundTag"))
+
+        val delayRoot = JSONObject(
+            XrayConfigBuilder.buildOutboundDelayTestJson(
+                server = amirServer,
+                settings = settings,
+                amirLocalPort = 41234
+            )
+        )
+        val delayProxy = delayRoot.getJSONArray("outbounds").getJSONObject(0)
+        assertEquals("socks", delayProxy.getString("protocol"))
+        assertEquals(41234, delayProxy.getJSONObject("settings").getJSONArray("servers").getJSONObject(0).getInt("port"))
+    }
+
+    @Test
+    fun `AmirLocalProxy dials upstream via Xray SOCKS5 bridge when xrayUpstreamPort is set`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
+
+        // 1. Simulated WebSocket Amir worker server
+        val wsServer = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = wsServer.localPort
+        val wsThread = Thread {
+            wsServer.accept().use { s ->
+                val inp = java.io.BufferedInputStream(s.getInputStream())
+                val out = s.getOutputStream()
+                var wsKey = ""
+                while (true) {
+                    val sb = StringBuilder()
+                    while (true) {
+                        val c = inp.read()
+                        if (c < 0 || c == '\n'.code) break
+                        if (c != '\r'.code) sb.append(c.toChar())
+                    }
+                    val line = sb.toString()
+                    if (line.isEmpty()) break
+                    if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                        wsKey = line.substringAfter(':').trim()
+                    }
+                }
+                val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                    .digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII))
+                val accept = android.util.Base64.encodeToString(sha1, android.util.Base64.NO_WRAP)
+                out.write(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n" +
+                            "Upgrade: websocket\r\n" +
+                            "Connection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: $accept\r\n" +
+                            "Sec-WebSocket-Protocol: chat.v2\r\n\r\n"
+                        ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+
+                fun readFrame(): ByteArray {
+                    inp.read()
+                    val b1 = inp.read()
+                    val masked = (b1 and 0x80) != 0
+                    val len = b1 and 0x7F
+                    val mask = if (masked) ByteArray(4).also { java.io.DataInputStream(inp).readFully(it) } else null
+                    val data = ByteArray(len).also { java.io.DataInputStream(inp).readFully(it) }
+                    if (mask != null) {
+                        for (i in data.indices) data[i] = (data[i].toInt() xor mask[i and 3].toInt()).toByte()
+                    }
+                    return data
+                }
+
+                fun writeFrame(data: ByteArray) {
+                    out.write(0x82)
+                    out.write(data.size)
+                    out.write(data)
+                    out.flush()
+                }
+
+                val init = readFrame()
+                val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, init.copyOfRange(0, 16))
+                val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                    .copyOfRange(0, 16)
+                writeFrame(com.example.core.AmirLocalProxy.xorBytes(expectedAck, key))
+                val reqData = com.example.core.AmirLocalProxy.xorBytes(readFrame(), key)
+                writeFrame(com.example.core.AmirLocalProxy.xorBytes(("XRAY:" + String(reqData)).toByteArray(), key))
+                out.write(byteArrayOf(0x88.toByte(), 0x00))
+                out.flush()
+            }
+        }
+        wsThread.isDaemon = true
+        wsThread.start()
+
+        // 2. Simulated Xray "amir-upstream" SOCKS5 inbound forwarding to wsServer
+        val socksBridge = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val bridgePort = socksBridge.localPort
+        val bridgeUsed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val bridgeThread = Thread {
+            socksBridge.accept().use { client ->
+                val cIn = client.getInputStream()
+                val cOut = client.getOutputStream()
+                val dis = java.io.DataInputStream(cIn)
+                val greeting = ByteArray(3)
+                dis.readFully(greeting)
+                cOut.write(byteArrayOf(0x05, 0x00))
+                cOut.flush()
+                val head = ByteArray(4)
+                dis.readFully(head)
+                val atyp = head[3].toInt() and 0xFF
+                val targetHost = when (atyp) {
+                    1 -> java.net.InetAddress.getByAddress(ByteArray(4).also { dis.readFully(it) }).hostAddress!!
+                    3 -> String(ByteArray(dis.readUnsignedByte()).also { dis.readFully(it) })
+                    4 -> java.net.InetAddress.getByAddress(ByteArray(16).also { dis.readFully(it) }).hostAddress!!
+                    else -> error("unexpected atyp=$atyp")
+                }
+                val targetPort = dis.readUnsignedShort()
+                bridgeUsed.set(true)
+                java.net.Socket(targetHost, targetPort).use { upstream ->
+                    cOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    cOut.flush()
+                    val t1 = Thread { runCatching { cIn.copyTo(upstream.getOutputStream()) } }
+                    t1.isDaemon = true
+                    t1.start()
+                    runCatching { upstream.getInputStream().copyTo(cOut) }
+                }
+            }
+        }
+        bridgeThread.isDaemon = true
+        bridgeThread.start()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "XrayBridgeAmir",
+            protocol = ProtocolType.AMIR,
+            address = "127.0.0.1",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "ws://127.0.0.1:$wsPort/",
+            extraParam2 = ""
+        )
+        val proxy = com.example.core.AmirLocalProxy(serverConfig = cfg, xrayUpstreamPort = bridgePort)
+        val localPort = proxy.start()
+        try {
+            java.net.Socket("127.0.0.1", localPort).use { sock ->
+                sock.soTimeout = 5000
+                val out = sock.getOutputStream()
+                val inp = java.io.DataInputStream(sock.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                inp.readFully(ByteArray(2))
+                val host = "example.com".toByteArray(Charsets.UTF_8)
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x03, host.size.toByte()) + host + byteArrayOf(0x00, 0x50))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.readFully(rep)
+                assertEquals(0, rep[1].toInt())
+                out.write("OK".toByteArray())
+                out.flush()
+                val buf = ByteArray(32)
+                val n = inp.read(buf)
+                assertTrue(n > 0)
+                assertEquals("XRAY:OK", String(buf, 0, n))
+            }
+            assertTrue("Expected AmirLocalProxy to route upstream via xrayUpstreamPort", bridgeUsed.get())
+        } finally {
+            proxy.stop()
+            socksBridge.close()
+            wsServer.close()
+        }
+    }
 }
