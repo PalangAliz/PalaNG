@@ -5,24 +5,42 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Radar
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -89,7 +109,6 @@ fun SettingsScreen(
     var activeChoiceDialog by remember { mutableStateOf<SettingsDialogChoice?>(null) }
     var showHelpDialog by remember { mutableStateOf(false) }
 
-    // Collapsible section states (all expanded by default or cleanly toggleable)
     var uiExpanded by remember { mutableStateOf(true) }
     var vpnExpanded by remember { mutableStateOf(true) }
     var coreExpanded by remember { mutableStateOf(true) }
@@ -298,14 +317,20 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back_button")) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                     }
                 },
-                title = { Text(stringResource(R.string.settings_title)) }
+                title = {
+                    Text(
+                        text = stringResource(R.string.settings_title),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             )
         }
     ) { innerPadding ->
@@ -346,24 +371,24 @@ fun SettingsScreen(
                     }
                 }
             }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                contentPadding = PaddingValues(bottom = 36.dp)
+                    .weight(1f)
+                    .navigationBarsPadding(),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-            // 1. UI settings
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_ui),
-                    expanded = uiExpanded,
-                    onToggle = { uiExpanded = !uiExpanded },
-                    tag = "section_ui"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = uiExpanded) {
-                    Column {
+                // 1. UI settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_ui),
+                        icon = Icons.Outlined.Palette,
+                        expanded = uiExpanded,
+                        onToggle = { uiExpanded = !uiExpanded },
+                        tag = "section_ui"
+                    ) {
                         SwitchRow(
                             title = stringResource(R.string.pref_speed_display_title),
                             subtitle = stringResource(R.string.pref_speed_display_sub),
@@ -371,6 +396,7 @@ fun SettingsScreen(
                             testTag = "switch_speed_display",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(speedDisplayEnabled = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_confirm_delete_title),
                             subtitle = stringResource(R.string.pref_confirm_delete_sub),
@@ -378,6 +404,7 @@ fun SettingsScreen(
                             testTag = "switch_confirm_delete",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(confirmDeleteConfig = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_two_column_title),
                             subtitle = stringResource(R.string.pref_two_column_sub),
@@ -385,6 +412,7 @@ fun SettingsScreen(
                             testTag = "switch_two_column",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(twoColumnLayout = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_show_all_tab_title),
                             subtitle = stringResource(R.string.pref_show_all_tab_sub),
@@ -392,6 +420,7 @@ fun SettingsScreen(
                             testTag = "switch_show_all_tab",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(showAllGroupTab = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_dynamic_color_title),
                             subtitle = stringResource(R.string.pref_dynamic_color_sub),
@@ -400,12 +429,14 @@ fun SettingsScreen(
                             testTag = "switch_dynamic_color",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(dynamicColorEnabled = v) } }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.settings_language),
                             value = languageLabels[settings.languageMode.name] ?: settings.languageMode.name,
                             testTag = "row_language",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.LANGUAGE }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.settings_theme),
                             value = themeLabels[settings.themeMode.name] ?: settings.themeMode.name,
@@ -414,21 +445,16 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 2. VPN Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_vpn),
-                    expanded = vpnExpanded,
-                    onToggle = { vpnExpanded = !vpnExpanded },
-                    tag = "section_vpn"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = vpnExpanded) {
-                    Column {
+                // 2. VPN Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_vpn),
+                        icon = Icons.Outlined.Shield,
+                        expanded = vpnExpanded,
+                        onToggle = { vpnExpanded = !vpnExpanded },
+                        tag = "section_vpn"
+                    ) {
                         SwitchRow(
                             title = stringResource(R.string.pref_enable_ipv6_title),
                             subtitle = stringResource(R.string.pref_enable_ipv6_sub),
@@ -437,6 +463,7 @@ fun SettingsScreen(
                             testTag = "switch_enable_ipv6",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(enableIpv6 = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_prefer_ipv6_title),
                             subtitle = stringResource(R.string.pref_prefer_ipv6_sub),
@@ -444,6 +471,7 @@ fun SettingsScreen(
                             testTag = "switch_prefer_ipv6",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(preferIpv6 = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_local_dns_title),
                             subtitle = stringResource(R.string.pref_local_dns_sub),
@@ -451,6 +479,7 @@ fun SettingsScreen(
                             testTag = "switch_local_dns",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(localDnsEnabled = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_fake_dns_title),
                             subtitle = stringResource(R.string.pref_fake_dns_sub),
@@ -458,6 +487,7 @@ fun SettingsScreen(
                             testTag = "switch_fake_dns",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(fakeDnsEnabled = v) } }
                         )
+                        RowInsetDivider()
                         val vpnDnsEnabled = settings.vpnMode && !settings.localDnsEnabled && !settings.fakeDnsEnabled
                         ValueRow(
                             title = stringResource(R.string.pref_vpn_dns_title),
@@ -478,6 +508,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_append_http_proxy_title),
                             subtitle = stringResource(R.string.pref_append_http_proxy_sub),
@@ -486,6 +517,7 @@ fun SettingsScreen(
                             testTag = "switch_append_http_proxy",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(appendHttpProxyToVpn = v) } }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_bypass_lan_title),
                             value = if (settings.bypassLan) {
@@ -497,6 +529,7 @@ fun SettingsScreen(
                             testTag = "row_bypass_lan",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.BYPASS_LAN }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_vpn_interface_addr_title),
                             value = settings.vpnInterfaceAddress,
@@ -504,6 +537,7 @@ fun SettingsScreen(
                             testTag = "row_vpn_interface_addr",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.VPN_INTERFACE_ADDR }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_vpn_mtu_title),
                             value = settings.vpnMtu.toString(),
@@ -524,21 +558,16 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 3. Core Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_core),
-                    expanded = coreExpanded,
-                    onToggle = { coreExpanded = !coreExpanded },
-                    tag = "section_core"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = coreExpanded) {
-                    Column {
+                // 3. Core Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_core),
+                        icon = Icons.Outlined.Dns,
+                        expanded = coreExpanded,
+                        onToggle = { coreExpanded = !coreExpanded },
+                        tag = "section_core"
+                    ) {
                         SwitchRow(
                             title = stringResource(R.string.pref_sniffing_title),
                             subtitle = stringResource(R.string.pref_sniffing_sub),
@@ -546,6 +575,7 @@ fun SettingsScreen(
                             testTag = "switch_sniffing",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(sniffingEnabled = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_route_only_title),
                             subtitle = stringResource(R.string.pref_route_only_sub),
@@ -554,6 +584,7 @@ fun SettingsScreen(
                             testTag = "switch_route_only",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(routeOnly = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_local_proxy_title),
                             subtitle = stringResource(R.string.pref_local_proxy_sub),
@@ -562,6 +593,7 @@ fun SettingsScreen(
                             testTag = "switch_local_proxy",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(localProxyEnabled = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_allow_lan_title),
                             subtitle = stringResource(R.string.pref_allow_lan_sub),
@@ -570,6 +602,7 @@ fun SettingsScreen(
                             testTag = "switch_allow_lan",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(allowLan = v) } }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_dynamic_port_title),
                             subtitle = stringResource(R.string.pref_dynamic_port_sub),
@@ -578,6 +611,7 @@ fun SettingsScreen(
                             testTag = "switch_dynamic_port",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(dynamicProxyPortEnabled = v) } }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_local_socks_port_title),
                             value = settings.socksPort.toString(),
@@ -596,6 +630,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_local_http_port_title),
                             value = settings.httpPort.toString(),
@@ -614,6 +649,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_proxy_user_title),
                             value = settings.localProxyUsername.ifBlank { "—" },
@@ -628,6 +664,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_proxy_pass_title),
                             value = if (settings.localProxyPassword.isBlank()) "—" else "••••••••",
@@ -643,6 +680,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         SwitchRow(
                             title = stringResource(R.string.pref_socks5_udp_title),
                             subtitle = stringResource(R.string.pref_socks5_udp_sub),
@@ -651,6 +689,7 @@ fun SettingsScreen(
                             testTag = "switch_socks5_udp",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(socks5UdpEnabled = v) } }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_remote_dns_title),
                             value = settings.remoteDns,
@@ -665,6 +704,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_direct_dns_title),
                             value = settings.domesticDns,
@@ -679,6 +719,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_dns_hosts_title),
                             value = settings.dnsHosts.ifBlank { "—" },
@@ -693,12 +734,14 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_log_level_title),
                             value = settings.logLevel,
                             testTag = "row_log_level",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.LOG_LEVEL }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_outbound_resolve_title),
                             value = outboundResolveLabels[settings.outboundDomainResolve] ?: settings.outboundDomainResolve,
@@ -707,21 +750,16 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 4. Mux Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_mux),
-                    expanded = muxExpanded,
-                    onToggle = { muxExpanded = !muxExpanded },
-                    tag = "section_mux"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = muxExpanded) {
-                    Column {
+                // 4. Mux Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_mux),
+                        icon = Icons.Outlined.Speed,
+                        expanded = muxExpanded,
+                        onToggle = { muxExpanded = !muxExpanded },
+                        tag = "section_mux"
+                    ) {
                         SwitchRow(
                             title = stringResource(R.string.pref_mux_title),
                             subtitle = stringResource(R.string.pref_mux_sub),
@@ -729,6 +767,7 @@ fun SettingsScreen(
                             testTag = "switch_mux",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(muxEnabled = v) } }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_mux_tcp_title),
                             value = settings.muxConcurrency.toString(),
@@ -747,6 +786,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_mux_xudp_title),
                             value = settings.muxXudpConcurrency.toString(),
@@ -765,6 +805,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_mux_quic_title),
                             value = settings.muxXudpProxyUdp443,
@@ -774,21 +815,16 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 5. Fragment Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_fragment),
-                    expanded = fragmentExpanded,
-                    onToggle = { fragmentExpanded = !fragmentExpanded },
-                    tag = "section_fragment"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = fragmentExpanded) {
-                    Column {
+                // 5. Fragment Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_fragment),
+                        icon = Icons.Outlined.Bolt,
+                        expanded = fragmentExpanded,
+                        onToggle = { fragmentExpanded = !fragmentExpanded },
+                        tag = "section_fragment"
+                    ) {
                         SwitchRow(
                             title = stringResource(R.string.pref_fragment_title),
                             subtitle = stringResource(R.string.pref_fragment_sub),
@@ -796,6 +832,7 @@ fun SettingsScreen(
                             testTag = "switch_fragment",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(fragmentEnabled = v) } }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_fragment_packets_title),
                             value = settings.fragmentPackets,
@@ -811,6 +848,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_fragment_length_title),
                             value = settings.fragmentLength,
@@ -826,6 +864,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_fragment_interval_title),
                             value = settings.fragmentInterval,
@@ -841,6 +880,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_fragment_max_split_title),
                             value = settings.fragmentMaxSplit.ifBlank { "10" },
@@ -858,27 +898,23 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 6. Observatory Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_observatory),
-                    expanded = observatoryExpanded,
-                    onToggle = { observatoryExpanded = !observatoryExpanded },
-                    tag = "section_observatory"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = observatoryExpanded) {
-                    Column {
+                // 6. Observatory Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_observatory),
+                        icon = Icons.Outlined.Radar,
+                        expanded = observatoryExpanded,
+                        onToggle = { observatoryExpanded = !observatoryExpanded },
+                        tag = "section_observatory"
+                    ) {
                         ValueRow(
                             title = stringResource(R.string.pref_observatory_mode_title),
                             value = observatoryModeLabels[settings.observatoryMode] ?: settings.observatoryMode,
                             testTag = "row_observatory_mode",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.OBSERVATORY_MODE }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_least_ping_interval_title),
                             value = settings.observatoryInterval,
@@ -893,6 +929,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_least_load_interval_title),
                             value = settings.burstObservatoryInterval,
@@ -907,12 +944,14 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_least_load_method_title),
                             value = settings.burstObservatoryHttpMethod,
                             testTag = "row_least_load_method",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.LEAST_LOAD_HTTP_METHOD }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_least_load_sampling_title),
                             value = settings.burstObservatorySampling.toString(),
@@ -930,6 +969,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_least_load_timeout_title),
                             value = settings.burstObservatoryTimeout,
@@ -946,21 +986,16 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 7. Advanced Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_advanced),
-                    expanded = advancedExpanded,
-                    onToggle = { advancedExpanded = !advancedExpanded },
-                    tag = "section_advanced"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = advancedExpanded) {
-                    Column {
+                // 7. Advanced Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_advanced),
+                        icon = Icons.Outlined.Tune,
+                        expanded = advancedExpanded,
+                        onToggle = { advancedExpanded = !advancedExpanded },
+                        tag = "section_advanced"
+                    ) {
                         SwitchRow(
                             title = stringResource(R.string.pref_auto_boot_title),
                             subtitle = stringResource(R.string.pref_auto_boot_sub),
@@ -968,6 +1003,7 @@ fun SettingsScreen(
                             testTag = "switch_auto_boot",
                             onCheckedChange = { v -> viewModel.updateSettings { it.copy(autoStartOnBoot = v) } }
                         )
+                        RowInsetDivider()
                         ActionRow(
                             title = stringResource(R.string.pref_system_vpn_title),
                             subtitle = stringResource(R.string.pref_system_vpn_sub),
@@ -986,6 +1022,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_delay_url_title),
                             value = settings.delayTestUrl,
@@ -1000,6 +1037,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_concurrent_delay_title),
                             value = settings.concurrentDelayTests.toString(),
@@ -1017,6 +1055,7 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                        RowInsetDivider()
                         ValueRow(
                             title = stringResource(R.string.pref_conn_info_url_title),
                             value = settings.connInfoTestUrl,
@@ -1033,21 +1072,16 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
-            // 8. Mode Settings
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp)) }
-            item {
-                CollapsibleSectionHeader(
-                    title = stringResource(R.string.settings_section_mode),
-                    expanded = modeExpanded,
-                    onToggle = { modeExpanded = !modeExpanded },
-                    tag = "section_mode"
-                )
-            }
-            item {
-                AnimatedVisibility(visible = modeExpanded) {
-                    Column {
+                // 8. Mode Settings
+                item {
+                    SettingsSectionCard(
+                        title = stringResource(R.string.settings_section_mode),
+                        icon = Icons.Outlined.Widgets,
+                        expanded = modeExpanded,
+                        onToggle = { modeExpanded = !modeExpanded },
+                        tag = "section_mode"
+                    ) {
                         ValueRow(
                             title = stringResource(R.string.pref_mode_title),
                             value = if (settings.vpnMode) {
@@ -1058,6 +1092,7 @@ fun SettingsScreen(
                             testTag = "row_vpn_mode",
                             onClick = { activeChoiceDialog = SettingsDialogChoice.VPN_MODE }
                         )
+                        RowInsetDivider()
                         ActionRow(
                             title = stringResource(R.string.pref_more_help_title),
                             subtitle = stringResource(R.string.pref_more_help_sub),
@@ -1067,7 +1102,6 @@ fun SettingsScreen(
                     }
                 }
             }
-        }
         }
     }
 }
@@ -1088,34 +1122,76 @@ private data class SettingEditTarget(
 )
 
 @Composable
-private fun CollapsibleSectionHeader(
+private fun SettingsSectionCard(
     title: String,
+    icon: ImageVector,
     expanded: Boolean,
     onToggle: () -> Unit,
-    tag: String
+    tag: String,
+    content: @Composable ColumnScope.() -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .minimumInteractiveComponentSize()
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .testTag(tag),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Icon(
-            imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-            contentDescription = if (expanded) "Collapse $title" else "Expand $title",
-            tint = MaterialTheme.colorScheme.primary
-        )
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .testTag(tag),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                    content()
+                }
+            }
+        }
     }
+}
+
+@Composable
+private fun RowInsetDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+    )
 }
 
 @Composable
@@ -1141,7 +1217,7 @@ private fun SwitchRow(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = subtitle,
@@ -1170,8 +1246,8 @@ private fun ValueRow(
         .let { if (testTag != null) it.testTag(testTag) else it }
 
     Column(modifier = modifier) {
-        Text(text = title, style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(2.dp))
+        Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+        Spacer(modifier = Modifier.height(3.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodySmall,
@@ -1195,7 +1271,7 @@ private fun ActionRow(
         .let { if (testTag != null) it.testTag(testTag) else it }
 
     Column(modifier = modifier) {
-        Text(text = title, style = MaterialTheme.typography.bodyLarge)
+        Text(text = title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
         Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = subtitle,

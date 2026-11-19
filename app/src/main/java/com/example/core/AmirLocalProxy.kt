@@ -41,7 +41,6 @@ class AmirLocalProxy(
     private val serverConfig: ServerConfig,
     private val settings: AppSettings = AppSettings(),
     private val resolvedHosts: Map<String, List<String>> = emptyMap(),
-    private val xrayUpstreamPort: Int = 0,
     private val protectSocket: (Socket) -> Boolean = { true },
     private val onLog: (String) -> Unit = {}
 ) {
@@ -49,7 +48,6 @@ class AmirLocalProxy(
     private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
     private val running = AtomicBoolean(false)
     private val loggedCleanIpFallback = AtomicBoolean(false)
-    private val loggedFragmentActive = AtomicBoolean(false)
     private val cleanIpFailureCount = AtomicInteger(0)
     private val cleanIpCooldownUntilMs = AtomicLong(0L)
     private val parsedDnsHosts = XrayConfigBuilder.parseDnsHosts(settings.dnsHosts)
@@ -96,10 +94,8 @@ class AmirLocalProxy(
         running.set(true)
         val boundPort = ss.localPort
         emitInfo(
-            "Amir local SOCKS5 listening on 127.0.0.1:$boundPort -> $workerHost" +
-                (if (cleanIp.isNotBlank()) " (CF Clean IP: $cleanIp)" else "") +
-                (if (xrayUpstreamPort > 0) " [via Xray:$xrayUpstreamPort]" else "") +
-                if (settings.fragmentEnabled && isTls) " [Fragment ${settings.fragmentLength}]" else ""
+            "Amir standalone core SOCKS5 output listening on 127.0.0.1:$boundPort -> $workerHost" +
+                (if (cleanIp.isNotBlank()) " (CF Clean IP: $cleanIp)" else "")
         )
 
         proxyExecutor.execute {
@@ -458,28 +454,15 @@ class AmirLocalProxy(
         if (isIpLiteral(cleanTarget)) {
             return InetAddress.getByName(cleanTarget)
         }
-        // 1. Honor user DNS host mappings (including domain: prefix and exact match)
-        val userMapped = parsedDnsHosts[cleanTarget]
+        val mapped = parsedDnsHosts[cleanTarget]
             ?: parsedDnsHosts["domain:$cleanTarget"]
             ?: parsedDnsHosts["full:$cleanTarget"]
             ?: resolvedHosts[cleanTarget]
-        val candidates = if (!userMapped.isNullOrEmpty()) {
-            userMapped.mapNotNull { ip -> runCatching { InetAddress.getByName(ip) }.getOrNull() }
-        } else {
-            InetAddress.getAllByName(cleanTarget).toList()
+        if (!mapped.isNullOrEmpty()) {
+            mapped.firstNotNullOfOrNull { ip -> runCatching { InetAddress.getByName(ip) }.getOrNull() }
+                ?.let { return it }
         }
-        if (candidates.isEmpty()) return InetAddress.getByName(cleanTarget)
-
-        val v4 = candidates.filterIsInstance<Inet4Address>()
-        val v6 = candidates.filterIsInstance<Inet6Address>()
-        val ordered = when (settings.outboundDomainResolve) {
-            AppSettings.OUTBOUND_USE_IPV4 -> v4.ifEmpty { candidates }
-            AppSettings.OUTBOUND_USE_IPV6 -> v6.ifEmpty { candidates }
-            AppSettings.OUTBOUND_USE_IP -> if (settings.preferIpv6) (v6 + v4) else (v4 + v6)
-            AppSettings.OUTBOUND_AS_IS -> if (settings.preferIpv6) (v6 + v4) else candidates
-            else -> if (settings.preferIpv6) (v6 + v4) else (v4 + v6)
-        }
-        return ordered.firstOrNull() ?: candidates.first()
+        return InetAddress.getByName(cleanTarget)
     }
 
     private fun dialDirectWebSocket(connectTarget: String, connectTimeoutMs: Int): DirectWsConnection {
@@ -488,39 +471,15 @@ class AmirLocalProxy(
         activeSockets.add(rawSocket)
         try {
             rawSocket.tcpNoDelay = true // Forces SocketImpl FD creation before protect()
-            val resolvedAddr = runCatching { resolveConnectAddress(connectTarget) }.getOrNull()
-            if (xrayUpstreamPort > 0) {
-                rawSocket.connect(InetSocketAddress("127.0.0.1", xrayUpstreamPort), connectTimeoutMs)
-                rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
-                openSocks5Tunnel(rawSocket, resolvedAddr, connectTarget, workerPort)
-            } else {
-                val targetAddr = resolvedAddr ?: InetAddress.getByName(connectTarget)
-                protectSocket(rawSocket)
-                rawSocket.connect(InetSocketAddress(targetAddr, workerPort), connectTimeoutMs)
-                rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
-            }
+            rawSocket.keepAlive = true
+            val targetAddr = resolveConnectAddress(connectTarget)
+            protectSocket(rawSocket)
+            rawSocket.connect(InetSocketAddress(targetAddr, workerPort), connectTimeoutMs)
+            rawSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
 
             val finalSocket: Socket = if (isTls) {
-                val useJavaFragment = settings.fragmentEnabled && xrayUpstreamPort <= 0
-                val baseSocketForTls: Socket = if (useJavaFragment) {
-                    if (loggedFragmentActive.compareAndSet(false, true)) {
-                        emitInfo("Amir TLS Fragment active (packets=${settings.fragmentPackets}, length=${settings.fragmentLength}, interval=${settings.fragmentInterval})")
-                    }
-                    FragmentingSocket(
-                        delegate = rawSocket,
-                        packetsSpec = settings.fragmentPackets,
-                        lengthRange = parseRangePair(settings.fragmentLength, 100, 200),
-                        intervalRange = parseRangePair(settings.fragmentInterval, 10, 20),
-                        maxSplit = parseRangePair(settings.fragmentMaxSplit, 10, 10).second.coerceIn(1, 64)
-                    )
-                } else {
-                    if (settings.fragmentEnabled && loggedFragmentActive.compareAndSet(false, true)) {
-                        emitInfo("Amir TLS Fragment delegated to Xray core (packets=${settings.fragmentPackets}, length=${settings.fragmentLength})")
-                    }
-                    rawSocket
-                }
                 val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-                val sslSocket = sslFactory.createSocket(baseSocketForTls, workerHost, workerPort, true) as SSLSocket
+                val sslSocket = sslFactory.createSocket(rawSocket, workerHost, workerPort, true) as SSLSocket
                 sslSocket.tcpNoDelay = true
                 val sslParams = sslSocket.sslParameters
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isIpLiteral(workerHost)) {
@@ -597,184 +556,6 @@ class AmirLocalProxy(
         }
     }
 
-    private fun openSocks5Tunnel(
-        socket: Socket,
-        resolvedAddr: InetAddress?,
-        fallbackHost: String,
-        port: Int
-    ) {
-        val out = socket.getOutputStream()
-        val inp = socket.getInputStream()
-
-        out.write(byteArrayOf(0x05, 0x01, 0x00))
-        out.flush()
-        val greeting = readExactBytes(inp, 2)
-        if (greeting[0].toInt() != 5 || greeting[1].toInt() != 0) {
-            throw IOException("Xray upstream SOCKS5 greeting rejected: ${greeting[1].toInt() and 0xFF}")
-        }
-
-        val addrPayload: ByteArray = when (resolvedAddr) {
-            is Inet4Address -> byteArrayOf(0x01) + resolvedAddr.address
-            is Inet6Address -> byteArrayOf(0x04) + resolvedAddr.address
-            else -> {
-                val hostBytes = fallbackHost.trim().removePrefix("[").removeSuffix("]")
-                    .toByteArray(StandardCharsets.UTF_8)
-                byteArrayOf(0x03, hostBytes.size.toByte()) + hostBytes
-            }
-        }
-        val req = ByteArray(3 + addrPayload.size + 2)
-        req[0] = 0x05
-        req[1] = 0x01 // CONNECT
-        req[2] = 0x00
-        System.arraycopy(addrPayload, 0, req, 3, addrPayload.size)
-        req[3 + addrPayload.size] = ((port ushr 8) and 0xFF).toByte()
-        req[4 + addrPayload.size] = (port and 0xFF).toByte()
-        out.write(req)
-        out.flush()
-
-        val respHead = readExactBytes(inp, 4)
-        if (respHead[0].toInt() != 5) {
-            throw IOException("Invalid SOCKS5 response version from Xray upstream")
-        }
-        val rep = respHead[1].toInt() and 0xFF
-        if (rep != 0) {
-            throw IOException("Xray upstream SOCKS5 dial failed (REP=$rep)")
-        }
-        val bndAtyp = respHead[3].toInt() and 0xFF
-        when (bndAtyp) {
-            1 -> readExactBytes(inp, 4 + 2)
-            4 -> readExactBytes(inp, 16 + 2)
-            3 -> {
-                val len = readExactBytes(inp, 1)[0].toInt() and 0xFF
-                readExactBytes(inp, len + 2)
-            }
-            else -> throw IOException("Unsupported SOCKS5 bind atyp=$bndAtyp")
-        }
-    }
-
-    private fun parseRangePair(spec: String, defMin: Int, defMax: Int): Pair<Int, Int> {
-        val parts = spec.trim().split('-').mapNotNull { it.trim().toIntOrNull() }
-        return when {
-            parts.size >= 2 -> {
-                val a = parts[0].coerceAtLeast(1)
-                val b = parts[1].coerceAtLeast(a)
-                a to b
-            }
-            parts.size == 1 -> {
-                val v = parts[0].coerceAtLeast(1)
-                v to v
-            }
-            else -> defMin to defMax
-        }
-    }
-
-    /**
-     * Wraps a plain TCP [Socket] before [SSLSocketFactory.createSocket] so TLS ClientHello
-     * (or initial N handshake writes) are split according to the user's Fragment settings.
-     */
-    private class FragmentingSocket(
-        private val delegate: Socket,
-        private val packetsSpec: String,
-        private val lengthRange: Pair<Int, Int>,
-        private val intervalRange: Pair<Int, Int>,
-        private val maxSplit: Int
-    ) : Socket() {
-        private val maxPacketsToFragment = parseMaxPackets(packetsSpec)
-        private val rawOut = delegate.getOutputStream()
-        private val fragOut = object : FilterOutputStream(rawOut) {
-            private var writeIndex = 0
-
-            override fun write(b: Int) {
-                rawOut.write(b)
-            }
-
-            override fun write(b: ByteArray) {
-                write(b, 0, b.size)
-            }
-
-            override fun write(b: ByteArray, off: Int, len: Int) {
-                writeIndex++
-                val isTlsRecord = len >= 6 && (b[off].toInt() and 0xFF) == 0x16
-                val shouldFragment = if (packetsSpec.equals("tlshello", ignoreCase = true)) {
-                    writeIndex == 1 || isTlsRecord
-                } else {
-                    writeIndex <= maxPacketsToFragment
-                }
-                if (!shouldFragment || len <= lengthRange.first) {
-                    rawOut.write(b, off, len)
-                    return
-                }
-                var cursor = off
-                val end = off + len
-                var splits = 0
-                while (cursor < end) {
-                    val remaining = end - cursor
-                    val chunkSize = if (splits >= maxSplit - 1) {
-                        remaining
-                    } else {
-                        val minLen = lengthRange.first.coerceAtLeast(1)
-                        val maxLen = lengthRange.second.coerceAtLeast(minLen)
-                        val picked = if (maxLen == minLen) minLen else minLen + random.nextInt(maxLen - minLen + 1)
-                        minOf(picked, remaining)
-                    }
-                    rawOut.write(b, cursor, chunkSize)
-                    rawOut.flush()
-                    cursor += chunkSize
-                    splits++
-                    if (cursor < end) {
-                        val minDelay = intervalRange.first.coerceAtLeast(0)
-                        val maxDelay = intervalRange.second.coerceAtLeast(minDelay)
-                        val sleepMs = if (maxDelay == minDelay) minDelay else minDelay + random.nextInt(maxDelay - minDelay + 1)
-                        if (sleepMs > 0) {
-                            runCatching { Thread.sleep(sleepMs.toLong()) }
-                        }
-                    }
-                }
-            }
-        }
-
-        override fun getInputStream(): InputStream = delegate.getInputStream()
-        override fun getOutputStream(): OutputStream = fragOut
-        override fun close() = delegate.close()
-        override fun isClosed(): Boolean = delegate.isClosed
-        override fun isConnected(): Boolean = delegate.isConnected
-        override fun isBound(): Boolean = delegate.isBound
-        override fun isInputShutdown(): Boolean = delegate.isInputShutdown
-        override fun isOutputShutdown(): Boolean = delegate.isOutputShutdown
-        override fun getInetAddress(): InetAddress = delegate.inetAddress
-        override fun getLocalAddress(): InetAddress = delegate.localAddress
-        override fun getPort(): Int = delegate.port
-        override fun getLocalPort(): Int = delegate.localPort
-        override fun getRemoteSocketAddress(): SocketAddress? = delegate.remoteSocketAddress
-        override fun getLocalSocketAddress(): SocketAddress? = delegate.localSocketAddress
-        override fun setTcpNoDelay(on: Boolean) { delegate.tcpNoDelay = on }
-        override fun getTcpNoDelay(): Boolean = delegate.tcpNoDelay
-        override fun setSoTimeout(timeout: Int) { delegate.soTimeout = timeout }
-        override fun getSoTimeout(): Int = delegate.soTimeout
-        override fun setKeepAlive(on: Boolean) { delegate.keepAlive = on }
-        override fun getKeepAlive(): Boolean = delegate.keepAlive
-        override fun setSoLinger(on: Boolean, linger: Int) { delegate.setSoLinger(on, linger) }
-        override fun getSoLinger(): Int = delegate.soLinger
-        override fun setSendBufferSize(size: Int) { delegate.sendBufferSize = size }
-        override fun getSendBufferSize(): Int = delegate.sendBufferSize
-        override fun setReceiveBufferSize(size: Int) { delegate.receiveBufferSize = size }
-        override fun getReceiveBufferSize(): Int = delegate.receiveBufferSize
-        override fun setReuseAddress(on: Boolean) { delegate.reuseAddress = on }
-        override fun getReuseAddress(): Boolean = delegate.reuseAddress
-        override fun setTrafficClass(tc: Int) { delegate.trafficClass = tc }
-        override fun getTrafficClass(): Int = delegate.trafficClass
-        override fun setOOBInline(on: Boolean) { delegate.oobInline = on }
-        override fun getOOBInline(): Boolean = delegate.oobInline
-        override fun shutdownInput() = delegate.shutdownInput()
-        override fun shutdownOutput() = delegate.shutdownOutput()
-
-        companion object {
-            private fun parseMaxPackets(spec: String): Int {
-                val nums = spec.split('-').mapNotNull { it.trim().toIntOrNull() }
-                return (nums.maxOrNull() ?: 1).coerceIn(1, 32)
-            }
-        }
-    }
 
     private class DirectWsConnection(
         val socket: Socket,

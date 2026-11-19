@@ -178,8 +178,8 @@
     <string name="mode_vpn">VPN</string>
     <string name="mode_proxy_only">Proxy only</string>
     <string name="pref_more_help_title">Click me for more help</string>
-    <string name="pref_more_help_sub">Notes about Local DNS, FakeDNS, Fragment, Mux &amp; Amir engine</string>
-    <string name="help_dialog_body">• VPN Mode uses Xray-core native Go TUN (no root or external TUN daemon needed).\n\n• Enable Local DNS + FakeDNS is recommended for fast DNS routing and Amir protocol.\n\n• Outbound domain resolution \"Resolve and add to DNS Hosts\" resolves your proxy server hostname and DoH endpoints before tunnel startup to avoid DNS bootstrap loops.\n\n• Changes to Core, VPN, Routing, Per-App, Mux, Fragment, or Observatory settings apply automatically when returning from settings while connected.</string>
+    <string name="pref_more_help_sub">Notes about Local DNS, FakeDNS, Fragment, Mux &amp; standalone Amir core</string>
+    <string name="help_dialog_body">• VPN Mode uses Xray-core native Go TUN (no root or external TUN daemon needed).\n\n• AMIR profiles run in an isolated standalone core whose local SOCKS5 proxy feeds directly into Xray-core; amir:// URIs configure AMIR\'s own UUID, Worker URL, and Clean IP variables without Xray altering AMIR\'s transport.\n\n• Outbound domain resolution \"Resolve and add to DNS Hosts\" resolves your proxy server hostname and DoH endpoints before tunnel startup to avoid DNS bootstrap loops.\n\n• Changes to Core, VPN, Routing, Per-App, Mux, Fragment, or Observatory settings apply automatically when returning from settings while connected.</string>
 
     <string name="about_title">About</string>
 </resources>

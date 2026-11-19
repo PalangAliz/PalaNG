@@ -136,15 +136,6 @@ class XrayVpnService : VpnService() {
                     runtimeHttpPort = settings.httpPort
                 }
 
-                val amirXrayUpstreamPort = if (server.protocol == ProtocolType.AMIR) {
-                    allocateFreePort(
-                        fallback = 40447,
-                        excludePorts = setOf(runtimeSocksPort, runtimeHttpPort)
-                    )
-                } else {
-                    0
-                }
-
                 val amirPort = if (server.protocol == ProtocolType.AMIR) {
                     if (!settings.localDnsEnabled && !settings.fakeDnsEnabled) {
                         VpnStateHolder.appendLog("Note: Amir Worker forwards TCP only; enable Local DNS if UDP DNS queries fail")
@@ -152,8 +143,6 @@ class XrayVpnService : VpnService() {
                     val proxy = AmirLocalProxy(
                         serverConfig = server,
                         settings = settings,
-                        resolvedHosts = resolvedHosts,
-                        xrayUpstreamPort = amirXrayUpstreamPort,
                         protectSocket = { sock -> protect(sock) },
                         onLog = { msg -> VpnStateHolder.appendLog(msg) }
                     )
@@ -178,14 +167,13 @@ class XrayVpnService : VpnService() {
                     settings = settings,
                     customRules = rules,
                     amirLocalPort = amirPort,
-                    amirXrayUpstreamPort = amirXrayUpstreamPort,
                     resolvedServerHosts = resolvedHosts,
                     runtimeSocksPort = runtimeSocksPort,
                     runtimeHttpPort = runtimeHttpPort
                 )
 
                 if (settings.logLevel != "none") {
-                    logEffectiveSettingsSummary(settings, runtimeSocksPort, runtimeHttpPort)
+                    logEffectiveSettingsSummary(server.protocol, settings, runtimeSocksPort, runtimeHttpPort)
                 }
 
                 val tunFd = if (settings.vpnMode) {
@@ -281,18 +269,11 @@ class XrayVpnService : VpnService() {
             }
         }
 
-        if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD) {
-            if (server.protocol == ProtocolType.AMIR) {
-                val workerHost = android.net.Uri.parse(
-                    com.example.core.ConfigParser.normalizeAmirWorkerUrl(server.extraParam1.ifBlank { server.address })
-                ).host.orEmpty().ifBlank { server.address }
-                resolveHostIntoMap(workerHost, "Amir worker")
-                if (server.extraParam2.isNotBlank()) {
-                    resolveHostIntoMap(server.extraParam2, "Amir clean host")
-                }
-            } else if (server.protocol != ProtocolType.CUSTOM) {
-                resolveHostIntoMap(server.address, "outbound host")
-            }
+        if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD &&
+            server.protocol != ProtocolType.AMIR &&
+            server.protocol != ProtocolType.CUSTOM
+        ) {
+            resolveHostIntoMap(server.address, "outbound host")
         }
 
         // Pre-resolve DoH / DoT / DoQ DNS server hostnames so Xray DNS never hits a self-lookup deadlock
@@ -309,6 +290,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun logEffectiveSettingsSummary(
+        protocol: ProtocolType,
         settings: AppSettings,
         socksPort: Int,
         httpPort: Int
@@ -329,8 +311,12 @@ class XrayVpnService : VpnService() {
             append(",ipv6=${settings.enableIpv6}/preferV6=${settings.preferIpv6}")
             append(",outResolve=${settings.outboundDomainResolve}")
             append(",sniff=${settings.sniffingEnabled}/routeOnly=${settings.routeOnly}")
-            if (settings.muxEnabled) append(",mux=${settings.muxConcurrency}/${settings.muxXudpConcurrency}")
-            if (settings.fragmentEnabled) append(",frag=${settings.fragmentPackets}:${settings.fragmentLength}")
+            if (settings.muxEnabled && protocol != ProtocolType.AMIR && protocol != ProtocolType.WIREGUARD) {
+                append(",mux=${settings.muxConcurrency}/${settings.muxXudpConcurrency}")
+            }
+            if (settings.fragmentEnabled && protocol != ProtocolType.AMIR && protocol != ProtocolType.WIREGUARD) {
+                append(",frag=${settings.fragmentPackets}:${settings.fragmentLength}")
+            }
             if (settings.perAppProxyEnabled) {
                 append(",perApp=${if (settings.perAppBypassMode) "bypass" else "proxy"}(${settings.perAppPackages.size})")
             }

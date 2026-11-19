@@ -2,36 +2,48 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// PalaNG Visual Identity: Crisp Architectural White + Refined Burnt Pumpkin-Amber
-val PumpkinPrimary = Color(0xFFD96B00)
-val PumpkinPrimaryDark = Color(0xFFB35600)
-val PumpkinLightAccent = Color(0xFFEB8824)
-val PumpkinGold = Color(0xFFE08E36)
-val PumpkinContainerLight = Color(0xFFFFF3E6)
-val PumpkinContainerDark = Color(0xFF331D08)
+// PalaNG Visual Identity: Midnight Obsidian + Glacial Cyan-Teal + Platinum
+val BrandCanvasDark = Color(0xFF08101B)
 
-val CyanPrimary = Color(0xFFD96B00)
-val CyanPrimaryDark = Color(0xFFB35600)
-val EmeraldConnected = Color(0xFF15803D)
+val TealGlacial = Color(0xFF2DD4BF)
+val TealDeep = Color(0xFF0F766E)
+val TealMid = Color(0xFF14B8A6)
+val AzureAccent = Color(0xFF38BDF8)
+val AzureDeep = Color(0xFF0284C7)
+
+val TealContainerDark = Color(0xFF0D2E2E)
+val TealContainerLight = Color(0xFFCCFBF1)
+
+// Keep legacy symbol names mapped cleanly if referenced elsewhere
+val PumpkinPrimary = TealDeep
+val PumpkinPrimaryDark = Color(0xFF115E59)
+val PumpkinLightAccent = TealGlacial
+val PumpkinGold = AzureAccent
+val PumpkinContainerLight = TealContainerLight
+val PumpkinContainerDark = TealContainerDark
+val CyanPrimary = TealGlacial
+val CyanPrimaryDark = TealDeep
+
+val EmeraldConnected = Color(0xFF10B981)
 val EmeraldContainerDark = Color(0xFF064E3B)
-val EmeraldContainerLight = Color(0xFFDCFCE7)
+val EmeraldContainerLight = Color(0xFFD1FAE5)
 
-// Dark theme executive graphite charcoal surfaces
-val Obsidian950 = Color(0xFF0D0F13)
-val Obsidian900 = Color(0xFF12151B)
-val Obsidian850 = Color(0xFF171B22)
-val Obsidian800 = Color(0xFF1F242D)
-val Obsidian700 = Color(0xFF2B313D)
+// Dark theme Midnight Obsidian surfaces anchored to brand emblem canvas
+val Obsidian950 = Color(0xFF070C14)
+val Obsidian900 = Color(0xFF0B121E)
+val Obsidian850 = Color(0xFF111A2B)
+val Obsidian800 = Color(0xFF172236)
+val Obsidian700 = Color(0xFF213049)
 
-// Light theme pure white + cool architectural neutral grays
+// Light theme Arctic Slate + Pure White elevated cards
 val SurfaceWhite = Color(0xFFFFFFFF)
-val SurfaceNeutralLow = Color(0xFFFAFAFC)
-val SurfaceNeutralCard = Color(0xFFF4F5F7)
-val SurfaceNeutralHigh = Color(0xFFECEEF2)
+val SurfaceNeutralLow = Color(0xFFF3F6FA)
+val SurfaceNeutralCard = Color(0xFFFFFFFF)
+val SurfaceNeutralHigh = Color(0xFFE7EDF5)
 
-val AmberLatency = Color(0xFFD97706)
-val CoralError = Color(0xFFDC2626)
-val PurpleReality = Color(0xFF6D28D9)
-val BlueProtocol = Color(0xFF2563EB)
-val IndigoProtocol = Color(0xFF4F46E5)
-val TealProtocol = Color(0xFF0D9488)
+val AmberLatency = Color(0xFFF59E0B)
+val CoralError = Color(0xFFF43F5E)
+val PurpleReality = Color(0xFF8B5CF6)
+val BlueProtocol = Color(0xFF3B82F6)
+val IndigoProtocol = Color(0xFF6366F1)
+val TealProtocol = Color(0xFF14B8A6)

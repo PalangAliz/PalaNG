@@ -1,5 +1,6 @@
 package com.example.ui.theme
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -8,69 +9,72 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import com.example.data.model.ThemeMode
 
 private val DarkColorScheme = darkColorScheme(
-    primary = PumpkinLightAccent,
-    onPrimary = Color(0xFF1C0E00),
-    primaryContainer = PumpkinContainerDark,
-    onPrimaryContainer = Color(0xFFFFD8B0),
-    secondary = PumpkinGold,
-    onSecondary = Color(0xFF1C0E00),
-    secondaryContainer = Color(0xFF2B1C0B),
-    onSecondaryContainer = Color(0xFFFDE2C4),
-    tertiary = Color(0xFF22C55E),
-    onTertiary = Color(0xFF052E16),
+    primary = TealGlacial,
+    onPrimary = Color(0xFF03201E),
+    primaryContainer = TealContainerDark,
+    onPrimaryContainer = Color(0xFF99F6E4),
+    secondary = AzureAccent,
+    onSecondary = Color(0xFF041D2E),
+    secondaryContainer = Color(0xFF0F2942),
+    onSecondaryContainer = Color(0xFFBAE6FD),
+    tertiary = EmeraldConnected,
+    onTertiary = Color(0xFF032318),
     background = Obsidian950,
-    onBackground = Color(0xFFF3F4F6),
+    onBackground = Color(0xFFEAF0F7),
     surface = Obsidian900,
-    onSurface = Color(0xFFF3F4F6),
+    onSurface = Color(0xFFEAF0F7),
     surfaceVariant = Obsidian800,
-    onSurfaceVariant = Color(0xFF9CA3AF),
+    onSurfaceVariant = Color(0xFF93A4BD),
     surfaceContainerLowest = Obsidian950,
     surfaceContainerLow = Obsidian900,
     surfaceContainer = Obsidian850,
     surfaceContainerHigh = Obsidian800,
     surfaceContainerHighest = Obsidian700,
-    outline = Color(0xFF374151),
-    outlineVariant = Color(0xFF242933),
+    outline = Color(0xFF33435E),
+    outlineVariant = Color(0xFF1D293D),
     error = CoralError,
     onError = Color.White
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = PumpkinPrimary,
+    primary = TealDeep,
     onPrimary = Color.White,
-    primaryContainer = PumpkinContainerLight,
-    onPrimaryContainer = Color(0xFF4A2200),
-    secondary = PumpkinGold,
+    primaryContainer = TealContainerLight,
+    onPrimaryContainer = Color(0xFF042F2E),
+    secondary = AzureDeep,
     onSecondary = Color.White,
-    secondaryContainer = SurfaceNeutralHigh,
-    onSecondaryContainer = Color(0xFF1E222A),
+    secondaryContainer = Color(0xFFE0F2FE),
+    onSecondaryContainer = Color(0xFF082F49),
     tertiary = EmeraldConnected,
     onTertiary = Color.White,
-    background = SurfaceWhite,
-    onBackground = Color(0xFF111318),
+    background = SurfaceNeutralLow,
+    onBackground = Color(0xFF0F172A),
     surface = SurfaceWhite,
-    onSurface = Color(0xFF111318),
-    surfaceVariant = SurfaceNeutralCard,
-    onSurfaceVariant = Color(0xFF5D6472),
+    onSurface = Color(0xFF0F172A),
+    surfaceVariant = SurfaceNeutralHigh,
+    onSurfaceVariant = Color(0xFF475569),
     surfaceContainerLowest = SurfaceWhite,
-    surfaceContainerLow = SurfaceNeutralLow,
-    surfaceContainer = SurfaceNeutralCard,
-    surfaceContainerHigh = SurfaceNeutralHigh,
-    surfaceContainerHighest = Color(0xFFE3E6EC),
-    outline = Color(0xFFD0D5DD),
-    outlineVariant = Color(0xFFE5E7EB),
-    error = CoralError,
+    surfaceContainerLow = SurfaceWhite,
+    surfaceContainer = SurfaceNeutralHigh,
+    surfaceContainerHigh = Color(0xFFDCE4EE),
+    surfaceContainerHighest = Color(0xFFCFD9E6),
+    outline = Color(0xFFCBD5E1),
+    outlineVariant = Color(0xFFE2E8F0),
+    error = Color(0xFFDC2626),
     onError = Color.White
 )
 
 @Composable
 fun XrayNgTheme(
-    themeMode: ThemeMode = ThemeMode.LIGHT,
+    themeMode: ThemeMode = ThemeMode.DARK,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -86,6 +90,18 @@ fun XrayNgTheme(
         }
         useDark -> DarkColorScheme
         else -> LightColorScheme
+    }
+
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window
+            if (window != null) {
+                val controller = WindowCompat.getInsetsController(window, view)
+                controller.isAppearanceLightStatusBars = !useDark
+                controller.isAppearanceLightNavigationBars = !useDark
+            }
+        }
     }
 
     MaterialTheme(

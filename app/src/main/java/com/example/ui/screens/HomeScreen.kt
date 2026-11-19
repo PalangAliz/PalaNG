@@ -4,6 +4,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -68,7 +73,9 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -79,6 +86,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -100,12 +109,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -120,8 +133,13 @@ import com.example.service.XrayVpnService
 import com.example.ui.ConnectionInfoState
 import com.example.ui.MainViewModel
 import com.example.ui.theme.AmberLatency
+import com.example.ui.theme.BlueProtocol
+import com.example.ui.theme.BrandCanvasDark
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldConnected
+import com.example.ui.theme.IndigoProtocol
+import com.example.ui.theme.PurpleReality
+import com.example.ui.theme.TealProtocol
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -235,144 +253,198 @@ fun HomeScreen(
         )
     }
 
+    val navItemColors = NavigationDrawerItemDefaults.colors(
+        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+        selectedIconColor = MaterialTheme.colorScheme.primary,
+        selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer
+    )
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(300.dp)
+                drawerContainerColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.width(304.dp)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(horizontal = 20.dp, vertical = 22.dp)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    BrandCanvasDark,
+                                    BrandCanvasDark.copy(alpha = 0.92f)
+                                )
+                            )
+                        )
+                        .padding(horizontal = 20.dp, vertical = 24.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                            color = MaterialTheme.colorScheme.surface
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                            color = BrandCanvasDark,
+                            shadowElevation = 4.dp
                         ) {
                             Image(
-                                painter = painterResource(id = R.drawable.palang_minimal_icon_1795003260717),
+                                painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
                                 contentDescription = "PalaNG logo",
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .padding(2.dp)
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .size(54.dp)
+                                    .clip(RoundedCornerShape(14.dp))
                             )
                         }
                         Spacer(modifier = Modifier.width(14.dp))
-                        Column {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(
                                 text = stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
                             )
-                            Text(
-                                text = stringResource(R.string.brand_subtitle),
-                                style = MaterialTheme.typography.labelSmall,
-                                letterSpacing = 1.4.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = TealProtocol.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.brand_subtitle),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        letterSpacing = 1.2.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF5EEAD4),
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Surface(
+                                    color = Color.White.copy(alpha = 0.08f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = if (uiState.settings.vpnMode) "VPN" else "PROXY",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFCBD5E1),
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_profiles)) },
                     selected = true,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = { scope.launch { drawerState.close() } },
                     icon = { Icon(Icons.Outlined.RssFeed, contentDescription = null) },
-                    modifier = Modifier.padding(horizontal = 12.dp)
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_subscriptions)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigateSubscriptions()
                     },
                     icon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_subscriptions")
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_routing)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigateRouting()
                     },
                     icon = { Icon(Icons.Outlined.AltRoute, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_routing")
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_per_app)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigatePerApp()
                     },
                     icon = { Icon(Icons.Outlined.Apps, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_per_app")
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_settings)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigateSettings()
                     },
                     icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_settings")
                 )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp))
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp)
+                )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_logs)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigateLogs()
                     },
                     icon = { Icon(Icons.AutoMirrored.Outlined.Article, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_logs")
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_assets)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigateAssets()
                     },
                     icon = { Icon(Icons.Outlined.Storage, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_assets")
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_about)) },
                     selected = false,
+                    colors = navItemColors,
+                    shape = RoundedCornerShape(12.dp),
                     onClick = {
                         scope.launch { drawerState.close() }
                         onNavigateAbout()
                     },
                     icon = { Icon(Icons.Outlined.Info, contentDescription = null) },
                     modifier = Modifier
-                        .padding(horizontal = 12.dp)
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                         .testTag("drawer_about")
                 )
             }
@@ -397,193 +469,224 @@ fun HomeScreen(
                             }
                         },
                         title = {
-                            Column {
-                                Text(
-                                    text = stringResource(R.string.app_name),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = stringResource(R.string.brand_subtitle),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    letterSpacing = 1.2.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = BrandCanvasDark,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
+                                    )
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
+                                        contentDescription = "PalaNG emblem",
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = stringResource(R.string.app_name),
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.brand_subtitle),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            letterSpacing = 1.2.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = "• ${if (uiState.settings.vpnMode) "TUN" else "SOCKS"}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             }
                         },
                         actions = {
-                        val isDark = uiState.settings.themeMode == ThemeMode.DARK
-                        IconButton(
-                            onClick = {
-                                val next = if (isDark) ThemeMode.LIGHT else ThemeMode.DARK
-                                viewModel.updateSettings { it.copy(themeMode = next) }
-                            },
-                            modifier = Modifier.testTag("theme_toggle_button")
-                        ) {
-                            Icon(
-                                imageVector = if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                                contentDescription = stringResource(R.string.settings_theme)
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                showSearch = !showSearch
-                                if (!showSearch) viewModel.setSearchQuery("")
-                            },
-                            modifier = Modifier.testTag("search_toggle_button")
-                        ) {
-                            Icon(
-                                imageVector = if (showSearch) Icons.Outlined.Close else Icons.Outlined.Search,
-                                contentDescription = "Search profiles"
-                            )
-                        }
-
-                        Box {
+                            val isDark = uiState.settings.themeMode == ThemeMode.DARK
                             IconButton(
-                                onClick = { showAddMenu = true },
-                                modifier = Modifier.testTag("add_config_button")
+                                onClick = {
+                                    val next = if (isDark) ThemeMode.LIGHT else ThemeMode.DARK
+                                    viewModel.updateSettings { it.copy(themeMode = next) }
+                                },
+                                modifier = Modifier.testTag("theme_toggle_button")
                             ) {
-                                Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.action_add))
+                                Icon(
+                                    imageVector = if (isDark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                                    contentDescription = stringResource(R.string.settings_theme)
+                                )
                             }
-                            DropdownMenu(
-                                expanded = showAddMenu,
-                                onDismissRequest = { showAddMenu = false }
+                            IconButton(
+                                onClick = {
+                                    showSearch = !showSearch
+                                    if (!showSearch) viewModel.setSearchQuery("")
+                                },
+                                modifier = Modifier.testTag("search_toggle_button")
                             ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_import_clipboard)) },
-                                    leadingIcon = { Icon(Icons.Outlined.ContentPaste, null) },
-                                    onClick = {
-                                        showAddMenu = false
-                                        viewModel.importFromClipboard()
-                                    }
+                                Icon(
+                                    imageVector = if (showSearch) Icons.Outlined.Close else Icons.Outlined.Search,
+                                    contentDescription = "Search profiles"
                                 )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_scan_qr)) },
-                                    leadingIcon = { Icon(Icons.Outlined.QrCodeScanner, null) },
-                                    onClick = {
-                                        showAddMenu = false
-                                        onNavigateQrScanner()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_import_custom)) },
-                                    leadingIcon = { Icon(Icons.Outlined.Storage, null) },
-                                    onClick = {
-                                        showAddMenu = false
-                                        jsonFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                                    }
-                                )
-                                HorizontalDivider()
-                                listOf(
-                                    ProtocolType.VLESS to R.string.action_manual_vless,
-                                    ProtocolType.VMESS to R.string.action_manual_vmess,
-                                    ProtocolType.TROJAN to R.string.action_manual_trojan,
-                                    ProtocolType.SHADOWSOCKS to R.string.action_manual_ss,
-                                    ProtocolType.SOCKS to R.string.action_manual_socks,
-                                    ProtocolType.WIREGUARD to R.string.action_manual_wg,
-                                    ProtocolType.HYSTERIA2 to R.string.action_manual_hy2,
-                                    ProtocolType.AMIR to R.string.action_manual_amir
-                                ).forEach { (proto, labelRes) ->
+                            }
+
+                            Box {
+                                IconButton(
+                                    onClick = { showAddMenu = true },
+                                    modifier = Modifier.testTag("add_config_button")
+                                ) {
+                                    Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.action_add))
+                                }
+                                DropdownMenu(
+                                    expanded = showAddMenu,
+                                    onDismissRequest = { showAddMenu = false }
+                                ) {
                                     DropdownMenuItem(
-                                        text = { Text(stringResource(labelRes)) },
+                                        text = { Text(stringResource(R.string.action_import_clipboard)) },
+                                        leadingIcon = { Icon(Icons.Outlined.ContentPaste, null) },
                                         onClick = {
                                             showAddMenu = false
-                                            onNavigateEdit(null, proto.name)
+                                            viewModel.importFromClipboard()
                                         }
                                     )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.action_scan_qr)) },
+                                        leadingIcon = { Icon(Icons.Outlined.QrCodeScanner, null) },
+                                        onClick = {
+                                            showAddMenu = false
+                                            onNavigateQrScanner()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.action_import_custom)) },
+                                        leadingIcon = { Icon(Icons.Outlined.Storage, null) },
+                                        onClick = {
+                                            showAddMenu = false
+                                            jsonFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    listOf(
+                                        ProtocolType.AMIR to R.string.action_manual_amir,
+                                        ProtocolType.VLESS to R.string.action_manual_vless,
+                                        ProtocolType.VMESS to R.string.action_manual_vmess,
+                                        ProtocolType.TROJAN to R.string.action_manual_trojan,
+                                        ProtocolType.SHADOWSOCKS to R.string.action_manual_ss,
+                                        ProtocolType.SOCKS to R.string.action_manual_socks,
+                                        ProtocolType.WIREGUARD to R.string.action_manual_wg,
+                                        ProtocolType.HYSTERIA2 to R.string.action_manual_hy2
+                                    ).forEach { (proto, labelRes) ->
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(labelRes)) },
+                                            onClick = {
+                                                showAddMenu = false
+                                                onNavigateEdit(null, proto.name)
+                                            }
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        Box {
-                            IconButton(
-                                onClick = { showOverflowMenu = true },
-                                modifier = Modifier.testTag("overflow_menu_button")
-                            ) {
-                                Icon(Icons.Outlined.MoreVert, contentDescription = "More options")
-                            }
-                            DropdownMenu(
-                                expanded = showOverflowMenu,
-                                onDismissRequest = { showOverflowMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            if (uiState.isTestingBatch) stringResource(R.string.menu_stop_delay_test) else stringResource(R.string.menu_real_delay_all)
-                                        )
-                                    },
-                                    leadingIcon = { Icon(Icons.Outlined.Speed, null) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.testAllVisibleDelay()
-                                    }
-                                )
-                                if (uiState.connectionState == ConnectionState.CONNECTED) {
+                            Box {
+                                IconButton(
+                                    onClick = { showOverflowMenu = true },
+                                    modifier = Modifier.testTag("overflow_menu_button")
+                                ) {
+                                    Icon(Icons.Outlined.MoreVert, contentDescription = "More options")
+                                }
+                                DropdownMenu(
+                                    expanded = showOverflowMenu,
+                                    onDismissRequest = { showOverflowMenu = false }
+                                ) {
                                     DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.menu_connection_info)) },
-                                        leadingIcon = { Icon(Icons.Outlined.Public, null) },
+                                        text = {
+                                            Text(
+                                                if (uiState.isTestingBatch) stringResource(R.string.menu_stop_delay_test) else stringResource(R.string.menu_real_delay_all)
+                                            )
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.Speed, null) },
                                         onClick = {
                                             showOverflowMenu = false
-                                            viewModel.testCurrentConnectionInfo()
+                                            viewModel.testAllVisibleDelay()
+                                        }
+                                    )
+                                    if (uiState.connectionState == ConnectionState.CONNECTED) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.menu_connection_info)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Public, null) },
+                                            onClick = {
+                                                showOverflowMenu = false
+                                                viewModel.testCurrentConnectionInfo()
+                                            }
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_sort_delay)) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.sortByTestResults()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_update_subs)) },
+                                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.updateAllSubscriptions()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_remove_duplicates)) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.removeDuplicates()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_remove_invalid)) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.removeInvalidConfigs()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_export_all)) },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.exportAllVisibleToClipboard()
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                stringResource(R.string.menu_delete_all),
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            viewModel.deleteAllInCurrentGroup()
                                         }
                                     )
                                 }
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.menu_sort_delay)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.sortByTestResults()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.menu_update_subs)) },
-                                    leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.updateAllSubscriptions()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.menu_remove_duplicates)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.removeDuplicates()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.menu_remove_invalid)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.removeInvalidConfigs()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.menu_export_all)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.exportAllVisibleToClipboard()
-                                    }
-                                )
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            stringResource(R.string.menu_delete_all),
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.deleteAllInCurrentGroup()
-                                    }
-                                )
                             }
                         }
-                    }
-                )
-                HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    )
+                    HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
                 }
             },
             bottomBar = {
@@ -620,6 +723,7 @@ fun HomeScreen(
                         onValueChange = viewModel::setSearchQuery,
                         placeholder = { Text(stringResource(R.string.search_hint)) },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         leadingIcon = { Icon(Icons.Outlined.Search, null) },
                         trailingIcon = {
                             if (uiState.searchQuery.isNotEmpty()) {
@@ -635,12 +739,17 @@ fun HomeScreen(
                     )
                 }
 
-                // Subscription Group Tabs (like v2rayNG group bar)
+                // Group tabs
+                val chipShape = RoundedCornerShape(10.dp)
+                val chipColors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (uiState.settings.showAllGroupTab) {
@@ -648,6 +757,8 @@ fun HomeScreen(
                             selected = uiState.settings.selectedGroupId == AppSettings.GROUP_ALL,
                             onClick = { viewModel.selectGroup(AppSettings.GROUP_ALL) },
                             label = { Text("${stringResource(R.string.group_all)} (${uiState.servers.size})") },
+                            shape = chipShape,
+                            colors = chipColors,
                             modifier = Modifier.testTag("group_chip_all")
                         )
                     }
@@ -656,6 +767,8 @@ fun HomeScreen(
                         selected = uiState.settings.selectedGroupId == AppSettings.GROUP_DEFAULT,
                         onClick = { viewModel.selectGroup(AppSettings.GROUP_DEFAULT) },
                         label = { Text("${stringResource(R.string.group_default)} ($defaultCount)") },
+                        shape = chipShape,
+                        colors = chipColors,
                         modifier = Modifier.testTag("group_chip_default")
                     )
                     uiState.subscriptions.forEach { sub ->
@@ -663,7 +776,9 @@ fun HomeScreen(
                         FilterChip(
                             selected = uiState.settings.selectedGroupId == sub.id,
                             onClick = { viewModel.selectGroup(sub.id) },
-                            label = { Text("${sub.remarks} ($count)") }
+                            label = { Text("${sub.remarks} ($count)") },
+                            shape = chipShape,
+                            colors = chipColors
                         )
                     }
                 }
@@ -673,7 +788,7 @@ fun HomeScreen(
                 if (uiState.isTestingBatch && progress != null) {
                     val fraction = if (progress.second > 0) progress.first.toFloat() / progress.second else 0f
                     Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -684,7 +799,8 @@ fun HomeScreen(
                             ) {
                                 Text(
                                     text = "Testing real delay (${progress.first}/${progress.second})…",
-                                    style = MaterialTheme.typography.bodySmall
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium
                                 )
                                 TextButton(onClick = { viewModel.testAllVisibleDelay() }) {
                                     Text("Stop")
@@ -692,7 +808,9 @@ fun HomeScreen(
                             }
                             LinearProgressIndicator(
                                 progress = { fraction },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp))
                             )
                         }
                     }
@@ -710,9 +828,9 @@ fun HomeScreen(
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         gridItems(uiState.visibleServers, key = { it.id }) { server ->
                             val isSelected = server.id == uiState.settings.selectedServerId
@@ -734,13 +852,13 @@ fun HomeScreen(
                                 }
                             )
                         }
-                        item(span = { GridItemSpan(2) }) { Spacer(modifier = Modifier.height(12.dp)) }
+                        item(span = { GridItemSpan(2) }) { Spacer(modifier = Modifier.height(14.dp)) }
                     }
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(uiState.visibleServers, key = { it.id }) { server ->
                             val isSelected = server.id == uiState.settings.selectedServerId
@@ -762,7 +880,7 @@ fun HomeScreen(
                                 }
                             )
                         }
-                        item { Spacer(modifier = Modifier.height(12.dp)) }
+                        item { Spacer(modifier = Modifier.height(14.dp)) }
                     }
                 }
             }
@@ -789,22 +907,22 @@ private fun ServerProfileCard(
         },
         label = "indicatorColor"
     )
-    val cardContainer = if (isSelected) {
-        MaterialTheme.colorScheme.surfaceContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerLow
+    val cardContainer = when {
+        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh
+        isSelected -> MaterialTheme.colorScheme.surfaceContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
     val cardBorder = BorderStroke(
-        width = 1.dp,
+        width = if (isSelected || isConnected) 1.25.dp else 1.dp,
         color = when {
-            isConnected -> EmeraldConnected.copy(alpha = 0.5f)
-            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+            isConnected -> EmeraldConnected.copy(alpha = 0.65f)
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
             else -> MaterialTheme.colorScheme.outlineVariant
         }
     )
 
     Card(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = cardContainer),
         border = cardBorder,
         modifier = Modifier
@@ -816,19 +934,19 @@ private fun ServerProfileCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(78.dp),
+                .height(84.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .width(3.dp)
+                    .width(4.dp)
                     .fillMaxHeight()
                     .background(indicatorColor)
             )
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
@@ -845,9 +963,10 @@ private fun ServerProfileCard(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                 }
+                Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
                         text = server.maskedAddress(),
@@ -860,7 +979,7 @@ private fun ServerProfileCard(
                     Text(
                         text = "• ${server.transportSummary()}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                         maxLines = 1
                     )
                 }
@@ -869,13 +988,13 @@ private fun ServerProfileCard(
             Column(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(end = 6.dp)
+                modifier = Modifier.padding(end = 8.dp)
             ) {
                 LatencyBadge(latencyMs = server.latencyMs, onClick = onTestDelay)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = onShare,
-                        modifier = Modifier.size(38.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             Icons.Outlined.Share,
@@ -886,7 +1005,7 @@ private fun ServerProfileCard(
                     }
                     IconButton(
                         onClick = onEdit,
-                        modifier = Modifier.size(38.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             Icons.Outlined.Edit,
@@ -897,7 +1016,7 @@ private fun ServerProfileCard(
                     }
                     IconButton(
                         onClick = onDelete,
-                        modifier = Modifier.size(38.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             Icons.Outlined.DeleteOutline,
@@ -914,31 +1033,28 @@ private fun ServerProfileCard(
 
 @Composable
 private fun ProtocolBadge(protocol: ProtocolType) {
-    val isAmir = protocol == ProtocolType.AMIR
-    val bg = if (isAmir) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
+    val accent = when (protocol) {
+        ProtocolType.AMIR -> TealProtocol
+        ProtocolType.VLESS -> IndigoProtocol
+        ProtocolType.VMESS -> BlueProtocol
+        ProtocolType.TROJAN -> AmberLatency
+        ProtocolType.WIREGUARD -> EmeraldConnected
+        ProtocolType.HYSTERIA2 -> PurpleReality
+        ProtocolType.SHADOWSOCKS -> MaterialTheme.colorScheme.secondary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val fg = if (isAmir) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val isAccentStrong = protocol == ProtocolType.AMIR
     Surface(
-        color = bg,
-        shape = RoundedCornerShape(5.dp),
-        border = BorderStroke(
-            width = 0.75.dp,
-            color = if (isAmir) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) else MaterialTheme.colorScheme.outlineVariant
-        )
+        color = accent.copy(alpha = if (isAccentStrong) 0.16f else 0.11f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(0.75.dp, accent.copy(alpha = if (isAccentStrong) 0.48f else 0.3f))
     ) {
         Text(
             text = protocol.displayName.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = fg,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            color = if (isAccentStrong) MaterialTheme.colorScheme.primary else accent,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
         )
     }
 }
@@ -953,20 +1069,33 @@ private fun LatencyBadge(latencyMs: Long, onClick: () -> Unit) {
         else -> "${latencyMs} ms" to CoralError
     }
     Surface(
-        color = color.copy(alpha = 0.08f),
-        shape = RoundedCornerShape(6.dp),
-        border = BorderStroke(0.75.dp, color.copy(alpha = 0.25f)),
+        color = color.copy(alpha = 0.1f),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(0.75.dp, color.copy(alpha = 0.3f)),
         modifier = Modifier
             .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = color,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-        )
+        ) {
+            if (latencyMs != ServerConfig.UNTESTED_LATENCY) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(color)
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = color
+            )
+        }
     }
 }
 
@@ -989,23 +1118,23 @@ private fun CompactServerGridCard(
         },
         label = "gridIndicatorColor"
     )
-    val cardContainer = if (isSelected) {
-        MaterialTheme.colorScheme.surfaceContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerLow
+    val cardContainer = when {
+        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh
+        isSelected -> MaterialTheme.colorScheme.surfaceContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
     val cardBorder = BorderStroke(
-        width = 1.dp,
+        width = if (isSelected || isConnected) 1.25.dp else 1.dp,
         color = when {
-            isConnected -> EmeraldConnected.copy(alpha = 0.5f)
-            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+            isConnected -> EmeraldConnected.copy(alpha = 0.65f)
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
             else -> MaterialTheme.colorScheme.outlineVariant
         }
     )
     var showCardMenu by remember { mutableStateOf(false) }
 
     Card(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = cardContainer),
         border = cardBorder,
         modifier = Modifier
@@ -1017,10 +1146,10 @@ private fun CompactServerGridCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(3.dp)
+                    .height(3.5.dp)
                     .background(indicatorColor)
             )
-            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1029,7 +1158,7 @@ private fun CompactServerGridCard(
                     ProtocolBadge(server.protocol)
                     LatencyBadge(latencyMs = server.latencyMs, onClick = onTestDelay)
                 }
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = server.remarks,
                     style = MaterialTheme.typography.titleSmall,
@@ -1037,7 +1166,7 @@ private fun CompactServerGridCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(3.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1054,7 +1183,7 @@ private fun CompactServerGridCard(
                     Box {
                         IconButton(
                             onClick = { showCardMenu = true },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
                                 Icons.Outlined.MoreVert,
@@ -1204,136 +1333,185 @@ private fun VpnBottomControlDock(
         },
         label = "fabColor"
     )
+    val dockAccent by animateColorAsState(
+        targetValue = when (connectionState) {
+            ConnectionState.CONNECTED -> EmeraldConnected
+            ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
+            ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outlineVariant
+        },
+        label = "dockAccent"
+    )
+
+    val pulseTransition = rememberInfiniteTransition(label = "statusPulse")
+    val pulseAlpha by pulseTransition.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isConnected || isBusy) dockAccent.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
+        ),
+        shadowElevation = 6.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
+        val statusGlowColor = if (isConnected) EmeraldConnected.copy(alpha = 0.12f) else Color.Transparent
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    if (isConnected) {
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(statusGlowColor, Color.Transparent),
+                                center = Offset(size.width * 0.22f, size.height * 0.5f),
+                                radius = size.width * 0.45f
+                            ),
+                            center = Offset(size.width * 0.22f, size.height * 0.5f),
+                            radius = size.width * 0.45f
+                        )
+                    }
+                }
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(enabled = isConnected, onClick = onTapStatusTest)
+                    .padding(end = 10.dp, top = 4.dp, bottom = 4.dp)
+                    .testTag("bottom_status_bar")
             ) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable(enabled = isConnected, onClick = onTapStatusTest)
-                        .padding(end = 8.dp, top = 4.dp, bottom = 4.dp)
-                        .testTag("bottom_status_bar")
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val dotColor = when (connectionState) {
+                        ConnectionState.CONNECTED -> EmeraldConnected
+                        ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
+                        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outline
+                    }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(14.dp)
+                    ) {
+                        if (isConnected || isBusy) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clip(CircleShape)
+                                    .background(dotColor.copy(alpha = pulseAlpha * 0.4f))
+                            )
+                        }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(
-                                    when (connectionState) {
-                                        ConnectionState.CONNECTED -> EmeraldConnected
-                                        ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
-                                        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outline
-                                    }
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        val statusLabel = when (connectionState) {
-                            ConnectionState.DISCONNECTED -> stringResource(R.string.status_not_connected)
-                            ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
-                            ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
-                            ConnectionState.CONNECTED -> when {
-                                isTestingDelay -> stringResource(R.string.checking_connection)
-                                lastTestedDelay != null && lastTestedDelay >= 0 -> stringResource(R.string.connected_delay_ms, lastTestedDelay)
-                                lastTestedDelay != null && lastTestedDelay < 0 -> stringResource(R.string.connected_timeout)
-                                else -> stringResource(R.string.tap_to_test)
-                            }
-                        }
-                        Text(
-                            text = statusLabel,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                                .background(dotColor)
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    if (isConnected) {
-                        val subStatus = buildString {
-                            if (speedDisplayEnabled) {
-                                append("↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  ")
-                                append("↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})")
-                            } else {
-                                append(activeRemarks.ifBlank { "PalaNG" })
-                            }
-                            if (activeSocksPort != null) {
-                                append("  •  :$activeSocksPort")
-                            }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    val statusLabel = when (connectionState) {
+                        ConnectionState.DISCONNECTED -> stringResource(R.string.status_not_connected)
+                        ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
+                        ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
+                        ConnectionState.CONNECTED -> when {
+                            isTestingDelay -> stringResource(R.string.checking_connection)
+                            lastTestedDelay != null && lastTestedDelay >= 0 -> stringResource(R.string.connected_delay_ms, lastTestedDelay)
+                            lastTestedDelay != null && lastTestedDelay < 0 -> stringResource(R.string.connected_timeout)
+                            else -> stringResource(R.string.tap_to_test)
                         }
-                        Text(
-                            text = subStatus,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    } else {
-                        Text(
-                            text = if (activeRemarks.isNotBlank()) stringResource(R.string.selected_server, activeRemarks) else stringResource(R.string.no_server_selected),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
+                    Text(
+                        text = statusLabel,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-
+                Spacer(modifier = Modifier.height(5.dp))
                 if (isConnected) {
-                    IconButton(
-                        onClick = onTestConnectionInfo,
-                        modifier = Modifier.testTag("connection_info_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Public,
-                            contentDescription = stringResource(R.string.menu_connection_info),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                    val subStatus = buildString {
+                        if (speedDisplayEnabled) {
+                            append("↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  ")
+                            append("↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})")
+                        } else {
+                            append(activeRemarks.ifBlank { "PalaNG" })
+                        }
+                        if (activeSocksPort != null) {
+                            append("  • :$activeSocksPort")
+                        }
                     }
+                    Text(
+                        text = subStatus,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Text(
+                        text = if (activeRemarks.isNotBlank()) stringResource(R.string.selected_server, activeRemarks) else stringResource(R.string.no_server_selected),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
+            }
 
-                FloatingActionButton(
-                    onClick = onToggleConnect,
-                    shape = RoundedCornerShape(14.dp),
-                    containerColor = fabContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 1.dp,
-                        pressedElevation = 2.dp
-                    ),
-                    modifier = Modifier
-                        .size(52.dp)
-                        .testTag("vpn_connect_fab")
+            if (isConnected) {
+                IconButton(
+                    onClick = onTestConnectionInfo,
+                    modifier = Modifier.testTag("connection_info_button")
                 ) {
-                    when {
-                        isBusy -> CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.5.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        isConnected -> Icon(
-                            imageVector = Icons.Outlined.Stop,
-                            contentDescription = "Disconnect VPN",
-                            modifier = Modifier.size(26.dp)
-                        )
-                        else -> Icon(
-                            imageVector = Icons.Outlined.PlayArrow,
-                            contentDescription = "Connect VPN",
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Outlined.Public,
+                        contentDescription = stringResource(R.string.menu_connection_info),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            FloatingActionButton(
+                onClick = onToggleConnect,
+                shape = RoundedCornerShape(16.dp),
+                containerColor = fabContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 2.dp,
+                    pressedElevation = 4.dp
+                ),
+                modifier = Modifier
+                    .width(64.dp)
+                    .height(52.dp)
+                    .testTag("vpn_connect_fab")
+            ) {
+                when {
+                    isBusy -> CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.5.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    isConnected -> Icon(
+                        imageVector = Icons.Outlined.Stop,
+                        contentDescription = "Disconnect VPN",
+                        modifier = Modifier.size(26.dp)
+                    )
+                    else -> Icon(
+                        imageVector = Icons.Outlined.PlayArrow,
+                        contentDescription = "Connect VPN",
+                        modifier = Modifier.size(26.dp)
+                    )
                 }
             }
         }
@@ -1346,44 +1524,84 @@ private fun EmptyProfilesState(
     onScanQr: () -> Unit,
     onManualAdd: () -> Unit
 ) {
+    val glowColor = MaterialTheme.colorScheme.primary
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(28.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Image(
-            painter = painterResource(id = R.drawable.palang_minimal_icon_1795003260717),
-            contentDescription = "PalaNG logo",
+        Box(
+            contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(80.dp)
-                .clip(RoundedCornerShape(18.dp))
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+                .size(116.dp)
+                .drawBehind {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(glowColor.copy(alpha = 0.24f), Color.Transparent)
+                        ),
+                        radius = size.maxDimension * 0.72f
+                    )
+                }
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = BrandCanvasDark,
+                border = BorderStroke(1.25.dp, glowColor.copy(alpha = 0.45f)),
+                shadowElevation = 6.dp
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.palang_core_logo_1795085982814),
+                    contentDescription = "PalaNG logo",
+                    modifier = Modifier
+                        .size(92.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(20.dp))
         Text(
             text = stringResource(R.string.empty_profiles_title),
-            style = MaterialTheme.typography.titleMedium
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = stringResource(R.string.empty_profiles_hint),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 320.dp)
         )
-        Spacer(modifier = Modifier.height(20.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(onClick = onImportClipboard, modifier = Modifier.testTag("empty_import_clipboard")) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(
+                onClick = onImportClipboard,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("empty_import_clipboard")
+            ) {
                 Icon(Icons.Outlined.ContentPaste, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.btn_clipboard))
             }
-            TextButton(onClick = onScanQr, modifier = Modifier.testTag("empty_scan_qr")) {
+            OutlinedButton(
+                onClick = onScanQr,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("empty_scan_qr")
+            ) {
                 Icon(Icons.Outlined.QrCodeScanner, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.btn_scan_qr))
             }
-            TextButton(onClick = onManualAdd, modifier = Modifier.testTag("empty_add_manual")) {
+            OutlinedButton(
+                onClick = onManualAdd,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("empty_add_manual")
+            ) {
                 Icon(Icons.Outlined.Add, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.btn_manual))

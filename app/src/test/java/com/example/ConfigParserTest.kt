@@ -618,9 +618,9 @@ class ConfigParserTest {
     }
 
     @Test
-    fun `Amir full config routes upstream through Xray-core amir-upstream and amir-out with Fragment`() {
+    fun `Amir full config isolates standalone AMIR core and feeds SOCKS5 output into Xray without fragment or mux interference`() {
         val amirServer = ConfigParser.parseSingleUri(
-            "amir://63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd@twilight-dream.workers.dev:443?cleanIp=172.67.70.244#AmirXray"
+            "amir://63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd@twilight-dream.workers.dev:443?cleanIp=172.67.70.244#AmirStandalone"
         )!!
         val settings = AppSettings(
             vpnMode = true,
@@ -629,6 +629,8 @@ class ConfigParserTest {
             fragmentEnabled = true,
             fragmentPackets = "tlshello",
             fragmentLength = "80-160",
+            muxEnabled = true,
+            muxConcurrency = 8,
             outboundDomainResolve = AppSettings.OUTBOUND_USE_IPV4
         )
         val root = JSONObject(
@@ -636,45 +638,34 @@ class ConfigParserTest {
                 server = amirServer,
                 settings = settings,
                 customRules = emptyList(),
-                amirLocalPort = 40446,
-                amirXrayUpstreamPort = 40447
+                amirLocalPort = 40446
             )
         )
 
         val inbounds = root.getJSONArray("inbounds")
-        var foundUpstreamInbound = false
         for (i in 0 until inbounds.length()) {
-            val ib = inbounds.getJSONObject(i)
-            if (ib.optString("tag") == "amir-upstream") {
-                foundUpstreamInbound = true
-                assertEquals("socks", ib.getString("protocol"))
-                assertEquals("127.0.0.1", ib.getString("listen"))
-                assertEquals(40447, ib.getInt("port"))
-            }
+            assertFalse(
+                "Xray must not create amir-upstream inbound for isolated AMIR core",
+                inbounds.getJSONObject(i).optString("tag") == "amir-upstream"
+            )
         }
-        assertTrue("Expected amir-upstream inbound in Xray config", foundUpstreamInbound)
 
         val outbounds = root.getJSONArray("outbounds")
-        var hasFragmentOutbound = false
-        var amirOutSockopt: JSONObject? = null
+        var proxyOutbound: JSONObject? = null
         for (i in 0 until outbounds.length()) {
             val ob = outbounds.getJSONObject(i)
-            when (ob.optString("tag")) {
-                "fragment" -> hasFragmentOutbound = true
-                "amir-out" -> {
-                    assertEquals("freedom", ob.getString("protocol"))
-                    amirOutSockopt = ob.getJSONObject("streamSettings").getJSONObject("sockopt")
-                }
-            }
+            val tag = ob.optString("tag")
+            assertFalse("Xray must not create fragment outbound for AMIR", tag == "fragment")
+            assertFalse("Xray must not create amir-out freedom outbound for AMIR", tag == "amir-out")
+            if (tag == "proxy") proxyOutbound = ob
         }
-        assertTrue("Expected Xray fragment outbound when fragmentEnabled=true", hasFragmentOutbound)
-        assertNotNull("Expected amir-out freedom outbound", amirOutSockopt)
-        assertEquals("UseIPv4", amirOutSockopt!!.getString("domainStrategy"))
-        assertEquals("fragment", amirOutSockopt.getString("dialerProxy"))
-
-        val firstRule = root.getJSONObject("routing").getJSONArray("rules").getJSONObject(0)
-        assertEquals("amir-upstream", firstRule.getJSONArray("inboundTag").getString(0))
-        assertEquals("amir-out", firstRule.getString("outboundTag"))
+        assertNotNull("Expected Xray 'proxy' SOCKS outbound pointing to standalone AMIR core", proxyOutbound)
+        assertEquals("socks", proxyOutbound!!.getString("protocol"))
+        assertFalse("Xray must not attach mux to AMIR SOCKS outbound", proxyOutbound.has("mux"))
+        assertFalse("Xray must not attach streamSettings/dialerProxy to AMIR SOCKS outbound", proxyOutbound.has("streamSettings"))
+        val socksServer = proxyOutbound.getJSONObject("settings").getJSONArray("servers").getJSONObject(0)
+        assertEquals("127.0.0.1", socksServer.getString("address"))
+        assertEquals(40446, socksServer.getInt("port"))
 
         val delayRoot = JSONObject(
             XrayConfigBuilder.buildOutboundDelayTestJson(
@@ -689,11 +680,10 @@ class ConfigParserTest {
     }
 
     @Test
-    fun `AmirLocalProxy dials upstream via Xray SOCKS5 bridge when xrayUpstreamPort is set`() {
+    fun `AmirLocalProxy runs standalone and ignores Xray fragment or mux settings`() {
         val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
         val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
 
-        // 1. Simulated WebSocket Amir worker server
         val wsServer = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
         val wsPort = wsServer.localPort
         val wsThread = Thread {
@@ -754,7 +744,7 @@ class ConfigParserTest {
                     .copyOfRange(0, 16)
                 writeFrame(com.example.core.AmirLocalProxy.xorBytes(expectedAck, key))
                 val reqData = com.example.core.AmirLocalProxy.xorBytes(readFrame(), key)
-                writeFrame(com.example.core.AmirLocalProxy.xorBytes(("XRAY:" + String(reqData)).toByteArray(), key))
+                writeFrame(com.example.core.AmirLocalProxy.xorBytes(("ISO:" + String(reqData)).toByteArray(), key))
                 out.write(byteArrayOf(0x88.toByte(), 0x00))
                 out.flush()
             }
@@ -762,45 +752,8 @@ class ConfigParserTest {
         wsThread.isDaemon = true
         wsThread.start()
 
-        // 2. Simulated Xray "amir-upstream" SOCKS5 inbound forwarding to wsServer
-        val socksBridge = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
-        val bridgePort = socksBridge.localPort
-        val bridgeUsed = java.util.concurrent.atomic.AtomicBoolean(false)
-        val bridgeThread = Thread {
-            socksBridge.accept().use { client ->
-                val cIn = client.getInputStream()
-                val cOut = client.getOutputStream()
-                val dis = java.io.DataInputStream(cIn)
-                val greeting = ByteArray(3)
-                dis.readFully(greeting)
-                cOut.write(byteArrayOf(0x05, 0x00))
-                cOut.flush()
-                val head = ByteArray(4)
-                dis.readFully(head)
-                val atyp = head[3].toInt() and 0xFF
-                val targetHost = when (atyp) {
-                    1 -> java.net.InetAddress.getByAddress(ByteArray(4).also { dis.readFully(it) }).hostAddress!!
-                    3 -> String(ByteArray(dis.readUnsignedByte()).also { dis.readFully(it) })
-                    4 -> java.net.InetAddress.getByAddress(ByteArray(16).also { dis.readFully(it) }).hostAddress!!
-                    else -> error("unexpected atyp=$atyp")
-                }
-                val targetPort = dis.readUnsignedShort()
-                bridgeUsed.set(true)
-                java.net.Socket(targetHost, targetPort).use { upstream ->
-                    cOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    cOut.flush()
-                    val t1 = Thread { runCatching { cIn.copyTo(upstream.getOutputStream()) } }
-                    t1.isDaemon = true
-                    t1.start()
-                    runCatching { upstream.getInputStream().copyTo(cOut) }
-                }
-            }
-        }
-        bridgeThread.isDaemon = true
-        bridgeThread.start()
-
         val cfg = com.example.data.model.ServerConfig(
-            remarks = "XrayBridgeAmir",
+            remarks = "StandaloneAmir",
             protocol = ProtocolType.AMIR,
             address = "127.0.0.1",
             port = wsPort,
@@ -808,7 +761,14 @@ class ConfigParserTest {
             extraParam1 = "ws://127.0.0.1:$wsPort/",
             extraParam2 = ""
         )
-        val proxy = com.example.core.AmirLocalProxy(serverConfig = cfg, xrayUpstreamPort = bridgePort)
+        val settings = AppSettings(
+            fragmentEnabled = true,
+            fragmentPackets = "tlshello",
+            fragmentLength = "1-2",
+            muxEnabled = true,
+            muxConcurrency = 16
+        )
+        val proxy = com.example.core.AmirLocalProxy(serverConfig = cfg, settings = settings)
         val localPort = proxy.start()
         try {
             java.net.Socket("127.0.0.1", localPort).use { sock ->
@@ -829,12 +789,10 @@ class ConfigParserTest {
                 val buf = ByteArray(32)
                 val n = inp.read(buf)
                 assertTrue(n > 0)
-                assertEquals("XRAY:OK", String(buf, 0, n))
+                assertEquals("ISO:OK", String(buf, 0, n))
             }
-            assertTrue("Expected AmirLocalProxy to route upstream via xrayUpstreamPort", bridgeUsed.get())
         } finally {
             proxy.stop()
-            socksBridge.close()
             wsServer.close()
         }
     }

@@ -178,8 +178,8 @@
     <string name="mode_vpn">VPN</string>
     <string name="mode_proxy_only">فقط پراکسی (Proxy only)</string>
     <string name="pref_more_help_title">راهنمای بیشتر</string>
-    <string name="pref_more_help_sub">توضیحات درباره Local DNS، FakeDNS، Fragment، Mux و هسته Amir</string>
-    <string name="help_dialog_body">• حالت VPN از رابط بومی Go TUN درون هسته Xray استفاده می‌کند.\n\n• برای مسیریابی سریع DNS و پروتکل Amir، فعال بودن Local DNS و FakeDNS پیشنهاد می‌شود.\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور و DNS را پیش از بالا آمدن تونل ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، مسیریابی، پراکسی برنامه‌ها، Mux، Fragment و Observatory هنگام اتصال، به‌صورت خودکار با اتصال مجدد اعمال می‌شوند.</string>
+    <string name="pref_more_help_sub">توضیحات درباره Local DNS، FakeDNS، Fragment، Mux و هسته مجزای Amir</string>
+    <string name="help_dialog_body">• حالت VPN از رابط بومی Go TUN درون هسته Xray استفاده می‌کند.\n\n• پروفایل‌های AMIR در یک هسته کاملاً مجزا اجرا می‌شوند و خروجی SOCKS5 آن به Xray-core متصل می‌شود؛ لینک‌های amir:// فقط متغیرهای هسته امیر (UUID، Worker و Clean IP) را تنظیم می‌کنند و تنظیمات Xray/Fragment روی آن اثر نمی‌گذارد.\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور و DNS را پیش از بالا آمدن تونل ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، مسیریابی، پراکسی برنامه‌ها، Mux، Fragment و Observatory هنگام اتصال، به‌صورت خودکار با اتصال مجدد اعمال می‌شوند.</string>
 
     <string name="about_title">درباره برنامه</string>
 </resources>
