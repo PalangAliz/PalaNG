@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -39,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.core.AmirLocalProxy
 import com.example.core.ConfigParser
 import com.example.data.model.ProtocolType
 import com.example.data.model.ServerConfig
@@ -198,7 +200,7 @@ fun ProfileEditScreen(
                     value = config.extraParam1,
                     onValueChange = { config = config.copy(extraParam1 = it.trim()) },
                     label = { Text("Worker URL") },
-                    placeholder = { Text("wss://example.workers.dev/") },
+                    placeholder = { Text(AmirLocalProxy.DEFAULT_WORKER_URL) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -208,7 +210,7 @@ fun ProfileEditScreen(
                     value = config.extraParam2,
                     onValueChange = { config = config.copy(extraParam2 = it.trim()) },
                     label = { Text("CF Clean IP") },
-                    placeholder = { Text("172.67.70.244") },
+                    placeholder = { Text(AmirLocalProxy.DEFAULT_CLEAN_IP) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -218,12 +220,27 @@ fun ProfileEditScreen(
                     value = config.passwordOrId,
                     onValueChange = { config = config.copy(passwordOrId = it.trim()) },
                     label = { Text("UUID") },
-                    placeholder = { Text("63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd") },
+                    placeholder = { Text(AmirLocalProxy.DEFAULT_UUID) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("edit_amir_uuid")
                 )
+                OutlinedButton(
+                    onClick = {
+                        config = config.copy(
+                            remarks = config.remarks.ifBlank { "AMIR (cl4)" },
+                            extraParam1 = AmirLocalProxy.DEFAULT_WORKER_URL,
+                            extraParam2 = AmirLocalProxy.DEFAULT_CLEAN_IP,
+                            passwordOrId = AmirLocalProxy.DEFAULT_UUID
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("fill_amir_preset_button")
+                ) {
+                    Text("Use Reference Preset (cl4)")
+                }
                 Text(
                     text = "Amir connects through Xray-core's DNS, routing, and optional Fragment engine. Enabling Local DNS and FakeDNS in Settings is recommended.",
                     style = MaterialTheme.typography.bodySmall,

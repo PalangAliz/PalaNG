@@ -137,15 +137,24 @@ class AmirLocalProxy(
             val localIn = BufferedInputStream(localSocket.getInputStream(), IO_BUFFER_SIZE)
             val localOut = localSocket.getOutputStream()
 
-            // 1. SOCKS5 Greeting
+            // 1. SOCKS5 Greeting (only No-Auth 0x00 supported)
             val header = readExactBytes(localIn, 2)
             if (header[0].toInt() != 5) return
             val nMethods = header[1].toInt() and 0xFF
-            if (nMethods > 0) readExactBytes(localIn, nMethods)
+            if (nMethods == 0) return
+            val methods = readExactBytes(localIn, nMethods)
+            val supportsNoAuth = methods.any { (it.toInt() and 0xFF) == 0x00 }
+            if (!supportsNoAuth) {
+                runCatching {
+                    localOut.write(byteArrayOf(0x05, 0xFF.toByte()))
+                    localOut.flush()
+                }
+                return
+            }
             localOut.write(byteArrayOf(0x05, 0x00))
             localOut.flush()
 
-            // 2. SOCKS5 Connect Request
+            // 2. SOCKS5 Connect Request (only CONNECT 0x01 supported)
             val req = readExactBytes(localIn, 4)
             if (req[0].toInt() != 5) return
             if (req[1].toInt() != 1) {
@@ -169,7 +178,13 @@ class AmirLocalProxy(
                     val addr = readExactBytes(localIn, 16)
                     InetAddress.getByAddress(addr).hostAddress ?: return
                 }
-                else -> return
+                else -> {
+                    runCatching {
+                        localOut.write(byteArrayOf(0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                        localOut.flush()
+                    }
+                    return
+                }
             }
             val portBytes = readExactBytes(localIn, 2)
             val targetPort = ((portBytes[0].toInt() and 0xFF) shl 8) or (portBytes[1].toInt() and 0xFF)
@@ -189,12 +204,14 @@ class AmirLocalProxy(
             wsConn.sendBinaryFrame(initPacket, 0, initPacket.size, mask = null)
             wsConn.out.flush()
 
-            // 5. Receive and verify HMAC("OK") acknowledgement
+            // 5. Receive and verify HMAC("OK") acknowledgement (at least 16 bytes)
             val ack = wsConn.readMessageBytes()
             if (ack == null || ack.size < 16) return
             val decryptedAck = xorBytes(ack, key)
             val expectedAck = hmacSha256(key, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
-            if (!decryptedAck.contentEquals(expectedAck)) return
+            if (decryptedAck.size < 16 || !MessageDigest.isEqual(decryptedAck.copyOfRange(0, 16), expectedAck)) {
+                return
+            }
 
             // Switch both sockets to infinite idle timeout for long-lived streams (e.g., Telegram MTProto)
             localSocket.soTimeout = 0
@@ -288,9 +305,15 @@ class AmirLocalProxy(
         } catch (_: Exception) {
             hadWriteError = true
         } finally {
-            if (hadWriteError) {
-                runCatching { wsConn.socket.close() }
+            if (!hadWriteError && !wsConn.socket.isClosed) {
+                runCatching {
+                    synchronized(wsConn.writeLock) {
+                        wsConn.sendCloseFrame()
+                        wsConn.out.flush()
+                    }
+                }
             }
+            runCatching { wsConn.socket.close() }
         }
     }
 
@@ -401,6 +424,8 @@ class AmirLocalProxy(
             }
             localOut.flush()
         } catch (_: Exception) {
+        } finally {
+            runCatching { localOut.flush() }
         }
     }
 
@@ -797,6 +822,13 @@ class AmirLocalProxy(
             }
         }
 
+        fun sendCloseFrame() {
+            val m = ByteArray(4).also { random.nextBytes(it) }
+            out.write(0x88)
+            out.write(0x80)
+            out.write(m)
+        }
+
         fun readMessageBytes(): ByteArray? {
             var acc: ByteArray? = null
             var accLen = 0
@@ -875,7 +907,9 @@ class AmirLocalProxy(
             if (ack.size < 16) return@withContext -1L
             val decryptedAck = xorBytes(ack, key)
             val expectedAck = hmacSha256(key, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
-            if (!decryptedAck.contentEquals(expectedAck)) return@withContext -1L
+            if (decryptedAck.size < 16 || !MessageDigest.isEqual(decryptedAck.copyOfRange(0, 16), expectedAck)) {
+                return@withContext -1L
+            }
 
             val httpReq = "HEAD $path HTTP/1.1\r\nHost: $targetHost\r\nConnection: close\r\n\r\n"
                 .toByteArray(StandardCharsets.US_ASCII)
@@ -897,13 +931,16 @@ class AmirLocalProxy(
     }
 
     companion object {
-        private const val SUBPROTO = "chat.v2"
-        private const val MAX_CHUNK = 32768
+        const val DEFAULT_UUID = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        const val DEFAULT_WORKER_URL = "wss://twilight-dream-9e3c.aliahmadiphotoofficial.workers.dev/"
+        const val DEFAULT_CLEAN_IP = "172.67.70.244"
+        const val SUBPROTO = "chat.v2"
+        const val MAX_CHUNK = 16384
         private const val WS_MAX_HEADER_BYTES = 14
         private const val IO_BUFFER_SIZE = 65536
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
-        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 5_000
-        private const val DIRECT_CONNECT_TIMEOUT_MS = 10_000
+        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 15_000
+        private const val DIRECT_CONNECT_TIMEOUT_MS = 15_000
         private const val CLEAN_IP_COOLDOWN_MS = 30_000L
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private val random = SecureRandom()
@@ -960,6 +997,7 @@ class AmirLocalProxy(
                 }
             }
             val hostBytes = cleanHost.toByteArray(StandardCharsets.UTF_8)
+            require(hostBytes.size <= 255) { "Target domain exceeds 255 bytes" }
             val out = ByteArray(1 + hostBytes.size)
             out[0] = hostBytes.size.toByte()
             System.arraycopy(hostBytes, 0, out, 1, hostBytes.size)

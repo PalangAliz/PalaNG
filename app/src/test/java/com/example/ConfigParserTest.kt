@@ -838,4 +838,132 @@ class ConfigParserTest {
             wsServer.close()
         }
     }
+
+    @Test
+    fun `AmirLocalProxy matches cl4 defaults, rejects unsupported auth, accepts padded ACK, and closes WS on EOF`() {
+        assertEquals("63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd", com.example.core.AmirLocalProxy.DEFAULT_UUID)
+        assertEquals("wss://twilight-dream-9e3c.aliahmadiphotoofficial.workers.dev/", com.example.core.AmirLocalProxy.DEFAULT_WORKER_URL)
+        assertEquals("172.67.70.244", com.example.core.AmirLocalProxy.DEFAULT_CLEAN_IP)
+        assertEquals(16384, com.example.core.AmirLocalProxy.MAX_CHUNK)
+
+        val uuidBytes = com.example.core.AmirLocalProxy.DEFAULT_UUID.toByteArray(Charsets.UTF_8)
+        val serverSock = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = serverSock.localPort
+        val gotWsClose = java.util.concurrent.CountDownLatch(1)
+
+        val serverThread = Thread {
+            serverSock.accept().use { s ->
+                val inp = java.io.BufferedInputStream(s.getInputStream())
+                val out = s.getOutputStream()
+                var wsKey = ""
+                while (true) {
+                    val sb = StringBuilder()
+                    while (true) {
+                        val c = inp.read()
+                        if (c < 0 || c == '\n'.code) break
+                        if (c != '\r'.code) sb.append(c.toChar())
+                    }
+                    val line = sb.toString()
+                    if (line.isEmpty()) break
+                    if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                        wsKey = line.substringAfter(':').trim()
+                    }
+                }
+                val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                    .digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII))
+                val accept = android.util.Base64.encodeToString(sha1, android.util.Base64.NO_WRAP)
+                out.write(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n" +
+                            "Upgrade: websocket\r\n" +
+                            "Connection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: $accept\r\n" +
+                            "Sec-WebSocket-Protocol: chat.v2\r\n\r\n"
+                        ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+
+                fun readWsFrame(): Pair<Int, ByteArray> {
+                    val b0 = inp.read()
+                    val b1 = inp.read()
+                    val opcode = b0 and 0x0F
+                    val masked = (b1 and 0x80) != 0
+                    val len = b1 and 0x7F
+                    val mask = if (masked) ByteArray(4).also { java.io.DataInputStream(inp).readFully(it) } else null
+                    val data = ByteArray(len).also { java.io.DataInputStream(inp).readFully(it) }
+                    if (mask != null) {
+                        for (i in data.indices) data[i] = (data[i].toInt() xor mask[i and 3].toInt()).toByte()
+                    }
+                    return opcode to data
+                }
+
+                val (_, init) = readWsFrame()
+                val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, init.copyOfRange(0, 16))
+                val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                    .copyOfRange(0, 16)
+                // Send 20-byte ACK (>=16 bytes) matching spec
+                val paddedAckPlain = expectedAck + byteArrayOf(0x01, 0x02, 0x03, 0x04)
+                val encAck = com.example.core.AmirLocalProxy.xorBytes(paddedAckPlain, key)
+                out.write(0x82)
+                out.write(encAck.size)
+                out.write(encAck)
+                out.flush()
+
+                val (nextOpcode, _) = readWsFrame()
+                if (nextOpcode == 8) {
+                    gotWsClose.countDown()
+                    out.write(byteArrayOf(0x88.toByte(), 0x00))
+                    out.flush()
+                }
+            }
+        }
+        serverThread.isDaemon = true
+        serverThread.start()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "Cl4ParityAmir",
+            protocol = ProtocolType.AMIR,
+            address = "127.0.0.1",
+            port = wsPort,
+            passwordOrId = com.example.core.AmirLocalProxy.DEFAULT_UUID,
+            extraParam1 = "ws://127.0.0.1:$wsPort/",
+            extraParam2 = ""
+        )
+        val proxy = com.example.core.AmirLocalProxy(cfg)
+        val localPort = proxy.start()
+        try {
+            // 1. Reject auth method 0x02 (username/password only) with 0x05 0xFF
+            java.net.Socket("127.0.0.1", localPort).use { badAuth ->
+                badAuth.soTimeout = 3000
+                badAuth.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x02))
+                badAuth.getOutputStream().flush()
+                val resp = ByteArray(2)
+                java.io.DataInputStream(badAuth.getInputStream()).readFully(resp)
+                assertEquals(0x05, resp[0].toInt() and 0xFF)
+                assertEquals(0xFF, resp[1].toInt() and 0xFF)
+            }
+
+            // 2. Accept >=16-byte ACK and emit WS Close frame upon local socket close
+            java.net.Socket("127.0.0.1", localPort).use { sock ->
+                sock.soTimeout = 3000
+                val out = sock.getOutputStream()
+                val inp = java.io.DataInputStream(sock.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                inp.readFully(ByteArray(2))
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, 0xBB.toByte()))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.readFully(rep)
+                assertEquals(0, rep[1].toInt())
+            }
+            assertTrue(
+                "Expected AmirLocalProxy to send WS close frame when SOCKS5 client closes",
+                gotWsClose.await(3, java.util.concurrent.TimeUnit.SECONDS)
+            )
+        } finally {
+            proxy.stop()
+            serverSock.close()
+        }
+    }
 }
