@@ -307,12 +307,16 @@ object XrayConfigBuilder {
             .put("119.29.29.29").put("1.12.12.12").put("120.53.53.53").put("2402:4e00::").put("2402:4e00:1::")
             .put("180.76.76.76").put("2400:da00::6666")
             .put("114.114.114.114").put("114.114.115.115")
+            .put("114.114.114.119").put("114.114.115.119")
+            .put("114.114.114.110").put("114.114.115.110")
             .put("180.184.1.1").put("180.184.2.2")
             .put("101.226.4.6").put("218.30.118.6").put("123.125.81.6").put("140.207.198.6")
             .put("1.2.4.8").put("210.2.4.8")
-            .put("202.98.0.68").put("218.2.2.2").put("221.131.143.69")
-            .put("112.124.47.27").put("114.215.126.16").put("47.101.136.37")
-            .put("120.77.213.28").put("180.101.147.209")
+            .put("52.80.66.66").put("117.50.22.22")
+            .put("2400:7fc0:849e:200::4").put("2404:c2c0:85d8:901::4")
+            .put("117.50.10.10").put("52.80.52.52")
+            .put("2400:7fc0:849e:200::8").put("2404:c2c0:85d8:901::8")
+            .put("117.50.60.30").put("52.80.60.30")
 
         val rules = JSONArray()
             .put(
@@ -351,7 +355,6 @@ object XrayConfigBuilder {
                 JSONObject()
                     .put("type", "field")
                     .put("ip", cnDnsIps)
-                    .put("port", "53")
                     .put("outboundTag", "direct")
             )
             .put(
@@ -366,7 +369,6 @@ object XrayConfigBuilder {
                             .put("domain:360.cn")
                             .put("domain:onedns.net")
                     )
-                    .put("port", "53")
                     .put("outboundTag", "direct")
             )
             .put(
@@ -387,10 +389,10 @@ object XrayConfigBuilder {
                     .put(
                         "inboundTag",
                         JSONArray()
-                            .put("domestic-dns_cn_expect_0")
                             .put("domestic-dns_1_0")
                             .put("domestic-dns_2_0")
                             .put("domestic-dns_3_0")
+                            .put("domestic-dns_cn_expect_0")
                     )
                     .put("outboundTag", "direct")
             )
