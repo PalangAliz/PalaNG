@@ -1,16 +1,14 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -33,12 +31,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -46,8 +40,10 @@ import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.R
 import com.example.ui.MainViewModel
-import com.example.ui.theme.BrandCanvasDark
+import com.example.ui.components.PalangLineArtLogo
+import com.example.ui.theme.LocalIsDarkTheme
 import com.example.ui.theme.PumpkinYellow
+import com.example.ui.theme.PumpkinYellowDeep
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,96 +51,83 @@ fun AboutScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
-    val primaryGlow = PumpkinYellow
+    val isDark = LocalIsDarkTheme.current
+    val accent = if (isDark) PumpkinYellow else PumpkinYellowDeep
+
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
-                ),
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("about_back_button")) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = { Text(stringResource(R.string.about_title)) }
-            )
+            Column {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.74f)
+                    ),
+                    navigationIcon = {
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("about_back_button")) {
+                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    title = { Text(stringResource(R.string.about_title), fontWeight = FontWeight.SemiBold) }
+                )
+                HorizontalDivider(
+                    thickness = 0.6.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                )
+            }
         }
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
+                .padding(horizontal = 20.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
             Spacer(modifier = Modifier.height(6.dp))
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(116.dp)
-                    .drawBehind {
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(primaryGlow.copy(alpha = 0.28f), Color.Transparent)
-                            ),
-                            radius = size.maxDimension * 0.72f
-                        )
-                    }
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(26.dp),
-                    color = BrandCanvasDark,
-                    border = BorderStroke(1.75.dp, primaryGlow.copy(alpha = 0.72f)),
-                    shadowElevation = 6.dp
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_palang_logo),
-                        contentDescription = "PalaNG Icon",
-                        modifier = Modifier
-                            .size(96.dp)
-                            .padding(8.dp)
-                    )
-                }
-            }
+            PalangLineArtLogo(
+                modifier = Modifier.size(96.dp),
+                contentDescription = "PalaNG Icon"
+            )
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = stringResource(R.string.app_name),
                     style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.5).sp
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(8.dp)
+                        color = PumpkinYellow.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(0.75.dp, accent.copy(alpha = 0.5f))
                     ) {
                         Text(
                             text = stringResource(R.string.brand_subtitle),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = accent,
                             letterSpacing = 1.4.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                         )
                     }
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         Text(
                             text = "v${BuildConfig.VERSION_NAME}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                         )
                     }
                 }
@@ -153,30 +136,33 @@ fun AboutScreen(
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.80f else 0.78f)
                 ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                border = BorderStroke(0.85.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    InfoBlock(label = "Routing & TUN Engine", value = viewModel.getCoreVersion())
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    InfoBlock(label = "Routing & TUN Engine", value = viewModel.getCoreVersion(), accent = accent)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                     InfoBlock(
                         label = "Standalone AMIR Core",
-                        value = "Isolated WSS + XOR/HMAC-SHA256 transport engine feeding SOCKS5 output into Xray-core"
+                        value = "Isolated WSS + XOR/HMAC-SHA256 engine with UDP/TCP DNS & pooled connections feeding SOCKS5 output into Xray-core",
+                        accent = accent
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                     InfoBlock(
                         label = "Supported Protocols",
-                        value = "AMIR (Standalone Core), VLESS (XTLS Vision / REALITY), VMess, Trojan, Shadowsocks / SS2022, WireGuard, Hysteria2, SOCKS5, HTTP, Custom JSON"
+                        value = "AMIR (Standalone Core), VLESS (XTLS Vision / REALITY), VMess, Trojan, Shadowsocks / SS2022, WireGuard, Hysteria2, SOCKS5, HTTP, Custom JSON",
+                        accent = accent
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                     InfoBlock(
                         label = "Transports",
-                        value = "TCP, WebSocket, gRPC, HTTPUpgrade, XHTTP (SplitHTTP), HTTP/2, mKCP, QUIC"
+                        value = "TCP, WebSocket, gRPC, HTTPUpgrade, XHTTP (SplitHTTP), HTTP/2, mKCP, QUIC",
+                        accent = accent
                     )
                 }
             }
@@ -185,13 +171,13 @@ fun AboutScreen(
 }
 
 @Composable
-private fun InfoBlock(label: String, value: String) {
+private fun InfoBlock(label: String, value: String, accent: Color) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             text = label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             letterSpacing = 1.sp,
-            color = MaterialTheme.colorScheme.primary,
+            color = accent,
             fontWeight = FontWeight.SemiBold
         )
         Text(

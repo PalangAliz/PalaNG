@@ -71,7 +71,7 @@ fun AssetsScreen(
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.74f)
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("assets_back_button")) {
@@ -106,8 +106,8 @@ fun AssetsScreen(
             items(assets, key = { it.fileName }) { asset ->
                 Card(
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)),
+                    border = BorderStroke(0.85.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(

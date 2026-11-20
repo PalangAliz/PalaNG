@@ -10,7 +10,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -28,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -53,7 +53,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
@@ -74,10 +74,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -109,13 +105,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -123,6 +115,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.R
 import com.example.data.model.AppSettings
 import com.example.data.model.ProtocolType
@@ -132,17 +125,13 @@ import com.example.service.ConnectionState
 import com.example.service.XrayVpnService
 import com.example.ui.ConnectionInfoState
 import com.example.ui.MainViewModel
+import com.example.ui.components.PalangLineArtLogo
 import com.example.ui.theme.AmberLatency
-import com.example.ui.theme.BlueProtocol
-import com.example.ui.theme.BrandCanvasDark
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.EmeraldConnected
-import com.example.ui.theme.IndigoProtocol
 import com.example.ui.theme.LocalIsDarkTheme
 import com.example.ui.theme.PumpkinYellow
 import com.example.ui.theme.PumpkinYellowDeep
-import com.example.ui.theme.PurpleReality
-import com.example.ui.theme.TealProtocol
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -169,6 +158,7 @@ fun HomeScreen(
     val connectionInfoState by viewModel.connectionInfoState.collectAsStateWithLifecycle()
     val activeProxy by viewModel.activeProxy.collectAsStateWithLifecycle()
 
+    val isDark = LocalIsDarkTheme.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -257,90 +247,71 @@ fun HomeScreen(
     }
 
     val navItemColors = NavigationDrawerItemDefaults.colors(
-        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
-        selectedIconColor = MaterialTheme.colorScheme.primary,
-        selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer
+        selectedContainerColor = if (isDark) PumpkinYellow.copy(alpha = 0.14f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+        selectedIconColor = if (isDark) PumpkinYellow else MaterialTheme.colorScheme.primary,
+        selectedTextColor = MaterialTheme.colorScheme.onSurface
     )
+
+    val selectedServer = remember(uiState.servers, uiState.settings.selectedServerId) {
+        uiState.servers.firstOrNull { it.id == uiState.settings.selectedServerId }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
-                drawerContainerColor = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.width(304.dp)
+                drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                modifier = Modifier.width(292.dp)
             ) {
-                Box(
+                // Clean Editorial Drawer Header (matches current Light/Dark surface)
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    BrandCanvasDark,
-                                    BrandCanvasDark.copy(alpha = 0.92f)
-                                )
-                            )
-                        )
-                        .padding(horizontal = 20.dp, vertical = 24.dp)
+                        .statusBarsPadding()
+                        .padding(horizontal = 22.dp, vertical = 20.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.25.dp, PumpkinYellow.copy(alpha = 0.7f)),
-                            color = BrandCanvasDark,
-                            shadowElevation = 4.dp
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_palang_logo),
-                                contentDescription = "PalaNG logo",
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .padding(5.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        PalangLineArtLogo(
+                            modifier = Modifier.size(46.dp),
+                            contentDescription = "PalaNG logo"
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 text = stringResource(R.string.app_name),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                letterSpacing = (-0.3).sp
                             )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    color = PumpkinYellow.copy(alpha = 0.22f),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.brand_subtitle),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        letterSpacing = 1.2.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = PumpkinYellow,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                    )
-                                }
-                                Surface(
-                                    color = Color.White.copy(alpha = 0.08f),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = if (uiState.settings.vpnMode) "VPN" else "PROXY",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color(0xFFCBD5E1),
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
+                            Text(
+                                text = stringResource(R.string.brand_subtitle),
+                                style = MaterialTheme.typography.labelSmall,
+                                letterSpacing = 1.6.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDark) PumpkinYellow else PumpkinYellowDeep
+                            )
+                            Text(
+                                text = "v${BuildConfig.VERSION_NAME} · ${if (uiState.settings.vpnMode) "TUN" else "SOCKS"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .width(42.dp)
+                            .height(2.5.dp)
+                            .clip(CircleShape)
+                            .background(if (isDark) PumpkinYellow else PumpkinYellowDeep)
+                    )
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
                 Spacer(modifier = Modifier.height(10.dp))
                 NavigationDrawerItem(
-                    label = { Text(stringResource(R.string.nav_profiles)) },
+                    label = { Text(stringResource(R.string.nav_profiles), fontWeight = FontWeight.Medium) },
                     selected = true,
                     colors = navItemColors,
                     shape = RoundedCornerShape(12.dp),
@@ -405,8 +376,8 @@ fun HomeScreen(
                         .testTag("drawer_settings")
                 )
                 HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp)
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 18.dp)
                 )
                 NavigationDrawerItem(
                     label = { Text(stringResource(R.string.nav_logs)) },
@@ -456,12 +427,17 @@ fun HomeScreen(
         Scaffold(
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.navigationBarsPadding()
+                )
+            },
             topBar = {
                 Column {
                     TopAppBar(
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+                            containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.72f)
                         ),
                         navigationIcon = {
                             IconButton(
@@ -476,27 +452,16 @@ fun HomeScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = BrandCanvasDark,
-                                    border = BorderStroke(
-                                        1.25.dp,
-                                        PumpkinYellow.copy(alpha = 0.75f)
-                                    )
-                                ) {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.ic_palang_logo),
-                                        contentDescription = "PalaNG emblem",
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .padding(3.dp)
-                                    )
-                                }
+                                PalangLineArtLogo(
+                                    modifier = Modifier.size(32.dp),
+                                    contentDescription = "PalaNG emblem"
+                                )
                                 Column {
                                     Text(
                                         text = stringResource(R.string.app_name),
                                         style = MaterialTheme.typography.titleLarge,
                                         fontWeight = FontWeight.Bold,
+                                        letterSpacing = (-0.4).sp,
                                         maxLines = 1
                                     )
                                     Row(
@@ -506,12 +471,12 @@ fun HomeScreen(
                                         Text(
                                             text = stringResource(R.string.brand_subtitle),
                                             style = MaterialTheme.typography.labelSmall,
-                                            letterSpacing = 1.2.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.primary
+                                            letterSpacing = 1.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isDark) PumpkinYellow else PumpkinYellowDeep
                                         )
                                         Text(
-                                            text = "• ${if (uiState.settings.vpnMode) "TUN" else "SOCKS"}",
+                                            text = "· ${if (uiState.settings.vpnMode) "TUN" else "SOCKS"}",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -520,10 +485,10 @@ fun HomeScreen(
                             }
                         },
                         actions = {
-                            val isDark = uiState.settings.themeMode == ThemeMode.DARK
+                            val nextThemeIsLight = isDark
                             IconButton(
                                 onClick = {
-                                    val next = if (isDark) ThemeMode.LIGHT else ThemeMode.DARK
+                                    val next = if (nextThemeIsLight) ThemeMode.LIGHT else ThemeMode.DARK
                                     viewModel.updateSettings { it.copy(themeMode = next) }
                                 },
                                 modifier = Modifier.testTag("theme_toggle_button")
@@ -689,14 +654,22 @@ fun HomeScreen(
                             }
                         }
                     )
-                    HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(
+                        thickness = 0.6.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                    )
                 }
-            },
-            bottomBar = {
-                VpnBottomControlDock(
+            }
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                // Top Architectural Bento Hero Connection Card
+                HeroConnectionCard(
                     connectionState = uiState.connectionState,
-                    activeRemarks = uiState.servers.firstOrNull { it.id == uiState.settings.selectedServerId }?.remarks
-                        ?: "",
+                    selectedServer = selectedServer,
                     speedDisplayEnabled = uiState.settings.speedDisplayEnabled,
                     activeSocksPort = if (activeProxy.enabled && uiState.settings.dynamicProxyPortEnabled) activeProxy.socksPort else null,
                     uplinkBps = trafficStats.uplinkSpeedBps,
@@ -711,15 +684,10 @@ fun HomeScreen(
                         }
                     },
                     onTestConnectionInfo = { viewModel.testCurrentConnectionInfo() },
-                    onToggleConnect = onRequestConnect
+                    onToggleConnect = onRequestConnect,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                 )
-            }
-        ) { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
+
                 AnimatedVisibility(visible = showSearch) {
                     OutlinedTextField(
                         value = uiState.searchQuery,
@@ -737,51 +705,40 @@ fun HomeScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
                             .testTag("search_profiles_input")
                     )
                 }
 
-                // Group tabs
-                val chipShape = RoundedCornerShape(10.dp)
-                val chipColors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                // Minimalist Capsule Group Strip
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (uiState.settings.showAllGroupTab) {
-                        FilterChip(
+                        MinimalGroupPill(
+                            label = "${stringResource(R.string.group_all)} (${uiState.servers.size})",
                             selected = uiState.settings.selectedGroupId == AppSettings.GROUP_ALL,
                             onClick = { viewModel.selectGroup(AppSettings.GROUP_ALL) },
-                            label = { Text("${stringResource(R.string.group_all)} (${uiState.servers.size})") },
-                            shape = chipShape,
-                            colors = chipColors,
                             modifier = Modifier.testTag("group_chip_all")
                         )
                     }
                     val defaultCount = uiState.servers.count { it.subscriptionId.isEmpty() }
-                    FilterChip(
+                    MinimalGroupPill(
+                        label = "${stringResource(R.string.group_default)} ($defaultCount)",
                         selected = uiState.settings.selectedGroupId == AppSettings.GROUP_DEFAULT,
                         onClick = { viewModel.selectGroup(AppSettings.GROUP_DEFAULT) },
-                        label = { Text("${stringResource(R.string.group_default)} ($defaultCount)") },
-                        shape = chipShape,
-                        colors = chipColors,
                         modifier = Modifier.testTag("group_chip_default")
                     )
                     uiState.subscriptions.forEach { sub ->
                         val count = uiState.servers.count { it.subscriptionId == sub.id }
-                        FilterChip(
+                        MinimalGroupPill(
+                            label = "${sub.remarks} ($count)",
                             selected = uiState.settings.selectedGroupId == sub.id,
-                            onClick = { viewModel.selectGroup(sub.id) },
-                            label = { Text("${sub.remarks} ($count)") },
-                            shape = chipShape,
-                            colors = chipColors
+                            onClick = { viewModel.selectGroup(sub.id) }
                         )
                     }
                 }
@@ -791,7 +748,7 @@ fun HomeScreen(
                 if (uiState.isTestingBatch && progress != null) {
                     val fraction = if (progress.second > 0) progress.first.toFloat() / progress.second else 0f
                     Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -831,14 +788,14 @@ fun HomeScreen(
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         gridItems(uiState.visibleServers, key = { it.id }) { server ->
                             val isSelected = server.id == uiState.settings.selectedServerId
                             val isConnected = isSelected && uiState.connectionState == ConnectionState.CONNECTED
-                            CompactServerGridCard(
+                            MinimalServerGridCard(
                                 server = server,
                                 isSelected = isSelected,
                                 isConnected = isConnected,
@@ -855,18 +812,20 @@ fun HomeScreen(
                                 }
                             )
                         }
-                        item(span = { GridItemSpan(2) }) { Spacer(modifier = Modifier.height(14.dp)) }
+                        item(span = { GridItemSpan(2) }) {
+                            Spacer(modifier = Modifier.navigationBarsPadding().height(8.dp))
+                        }
                     }
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp)
                     ) {
                         items(uiState.visibleServers, key = { it.id }) { server ->
                             val isSelected = server.id == uiState.settings.selectedServerId
                             val isConnected = isSelected && uiState.connectionState == ConnectionState.CONNECTED
-                            ServerProfileCard(
+                            MinimalServerRowCard(
                                 server = server,
                                 isSelected = isSelected,
                                 isConnected = isConnected,
@@ -883,7 +842,9 @@ fun HomeScreen(
                                 }
                             )
                         }
-                        item { Spacer(modifier = Modifier.height(14.dp)) }
+                        item {
+                            Spacer(modifier = Modifier.navigationBarsPadding().height(8.dp))
+                        }
                     }
                 }
             }
@@ -892,7 +853,282 @@ fun HomeScreen(
 }
 
 @Composable
-private fun ServerProfileCard(
+private fun HeroConnectionCard(
+    connectionState: ConnectionState,
+    selectedServer: ServerConfig?,
+    speedDisplayEnabled: Boolean,
+    activeSocksPort: Int?,
+    uplinkBps: Long,
+    downlinkBps: Long,
+    totalUpload: Long,
+    totalDownload: Long,
+    lastTestedDelay: Long?,
+    isTestingDelay: Boolean,
+    onTapStatusTest: () -> Unit,
+    onTestConnectionInfo: () -> Unit,
+    onToggleConnect: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isDark = LocalIsDarkTheme.current
+    val isConnected = connectionState == ConnectionState.CONNECTED
+    val isBusy = connectionState == ConnectionState.CONNECTING || connectionState == ConnectionState.DISCONNECTING
+
+    val powerColor by animateColorAsState(
+        targetValue = when (connectionState) {
+            ConnectionState.CONNECTED -> EmeraldConnected
+            ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
+            ConnectionState.DISCONNECTED -> PumpkinYellow
+        },
+        label = "heroPowerColor"
+    )
+    val cardBorderColor by animateColorAsState(
+        targetValue = when {
+            isConnected -> EmeraldConnected.copy(alpha = 0.55f)
+            isBusy -> AmberLatency.copy(alpha = 0.55f)
+            else -> MaterialTheme.colorScheme.outlineVariant
+        },
+        label = "heroBorderColor"
+    )
+    val pulseTransition = rememberInfiniteTransition(label = "heroPulse")
+    val pulseAlpha by pulseTransition.animateFloat(
+        initialValue = 0.28f,
+        targetValue = 0.78f,
+        animationSpec = infiniteRepeatable(animation = tween(1000), repeatMode = RepeatMode.Reverse),
+        label = "heroPulseAlpha"
+    )
+
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.80f else 0.78f)
+        ),
+        border = BorderStroke(if (isConnected || isBusy) 1.25.dp else 0.85.dp, cardBorderColor),
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 720.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(enabled = isConnected, onClick = onTapStatusTest)
+                        .padding(end = 12.dp, top = 2.dp, bottom = 2.dp)
+                        .testTag("bottom_status_bar"),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        val dotColor = when (connectionState) {
+                            ConnectionState.CONNECTED -> EmeraldConnected
+                            ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
+                            ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outline
+                        }
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(12.dp)) {
+                            if (isConnected || isBusy) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(dotColor.copy(alpha = pulseAlpha * 0.42f))
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(dotColor)
+                            )
+                        }
+                        val statusLabel = when (connectionState) {
+                            ConnectionState.DISCONNECTED -> stringResource(R.string.status_not_connected)
+                            ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
+                            ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
+                            ConnectionState.CONNECTED -> when {
+                                isTestingDelay -> stringResource(R.string.checking_connection)
+                                lastTestedDelay != null && lastTestedDelay >= 0 ->
+                                    stringResource(R.string.connected_delay_ms, lastTestedDelay)
+                                lastTestedDelay != null && lastTestedDelay < 0 ->
+                                    stringResource(R.string.connected_timeout)
+                                else -> stringResource(R.string.tap_to_test)
+                            }
+                        }
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isConnected) EmeraldConnected else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Text(
+                        text = selectedServer?.remarks ?: stringResource(R.string.no_server_selected),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    val meta = buildString {
+                        if (selectedServer != null) {
+                            append(selectedServer.protocol.displayName.uppercase())
+                            append(" · ")
+                            append(selectedServer.maskedAddress())
+                        } else {
+                            append(stringResource(R.string.empty_profiles_hint))
+                        }
+                        if (activeSocksPort != null && isConnected) {
+                            append(" · :$activeSocksPort")
+                        }
+                    }
+                    Text(
+                        text = meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (isConnected) {
+                        IconButton(
+                            onClick = onTestConnectionInfo,
+                            modifier = Modifier.testTag("connection_info_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Public,
+                                contentDescription = stringResource(R.string.menu_connection_info),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    val powerContentColor = when (connectionState) {
+                        ConnectionState.CONNECTED -> Color.White
+                        else -> Color(0xFF1A1300)
+                    }
+                    Surface(
+                        onClick = onToggleConnect,
+                        shape = RoundedCornerShape(16.dp),
+                        color = powerColor,
+                        contentColor = powerContentColor,
+                        modifier = Modifier
+                            .size(width = 58.dp, height = 52.dp)
+                            .testTag("vpn_connect_fab")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            when {
+                                isBusy -> CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.2.dp,
+                                    color = powerContentColor
+                                )
+                                isConnected -> Icon(
+                                    imageVector = Icons.Outlined.Stop,
+                                    contentDescription = "Disconnect VPN",
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                else -> Icon(
+                                    imageVector = Icons.Outlined.PowerSettingsNew,
+                                    contentDescription = "Connect VPN",
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = isConnected && speedDisplayEnabled) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(
+                        thickness = 0.6.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldConnected,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MinimalGroupPill(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isDark = LocalIsDarkTheme.current
+    val containerColor = when {
+        selected && isDark -> PumpkinYellow
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.72f)
+    }
+    val contentColor = when {
+        selected && isDark -> Color(0xFF1A1200)
+        selected -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = containerColor,
+        contentColor = contentColor,
+        border = if (selected) null else BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier.height(36.dp)
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.padding(horizontal = 14.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun MinimalServerRowCard(
     server: ServerConfig,
     isSelected: Boolean,
     isConnected: Boolean,
@@ -902,27 +1138,31 @@ private fun ServerProfileCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val isDark = LocalIsDarkTheme.current
+    val activeAccent = if (isDark) PumpkinYellow else PumpkinYellowDeep
     val indicatorColor by animateColorAsState(
         targetValue = when {
             isConnected -> EmeraldConnected
-            isSelected -> MaterialTheme.colorScheme.primary
+            isSelected -> activeAccent
             else -> Color.Transparent
         },
-        label = "indicatorColor"
+        label = "rowIndicatorColor"
     )
-    val cardContainer = when {
-        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f)
-        isSelected -> MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f)
-        else -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)
-    }
-    val cardBorder = BorderStroke(
-        width = if (isSelected || isConnected) 1.25.dp else 1.dp,
-        color = when {
-            isConnected -> EmeraldConnected.copy(alpha = 0.65f)
-            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else -> MaterialTheme.colorScheme.outlineVariant
+    val cardContainer = MaterialTheme.colorScheme.surface.copy(
+        alpha = when {
+            isConnected || isSelected -> if (isDark) 0.84f else 0.84f
+            else -> if (isDark) 0.76f else 0.76f
         }
     )
+    val cardBorder = BorderStroke(
+        width = if (isSelected || isConnected) 1.2.dp else 0.8.dp,
+        color = when {
+            isConnected -> EmeraldConnected.copy(alpha = 0.65f)
+            isSelected -> activeAccent.copy(alpha = 0.65f)
+            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
+        }
+    )
+    var showMenu by remember { mutableStateOf(false) }
 
     Card(
         shape = RoundedCornerShape(14.dp),
@@ -937,26 +1177,26 @@ private fun ServerProfileCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(84.dp),
+                .height(72.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .width(4.dp)
+                    .width(3.dp)
                     .fillMaxHeight()
                     .background(indicatorColor)
             )
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.SpaceBetween
+                    .padding(start = 14.dp, end = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    ProtocolBadge(server.protocol)
+                    MinimalProtocolTag(server.protocol)
                     Text(
                         text = server.remarks,
                         style = MaterialTheme.typography.titleSmall,
@@ -966,66 +1206,65 @@ private fun ServerProfileCard(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = server.maskedAddress(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Text(
-                        text = "• ${server.transportSummary()}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                        maxLines = 1
-                    )
-                }
+                Text(
+                    text = "${server.maskedAddress()} · ${server.transportSummary()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(end = 8.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(end = 4.dp)
             ) {
                 LatencyBadge(latencyMs = server.latencyMs, onClick = onTestDelay)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onShare,
-                        modifier = Modifier.size(40.dp)
-                    ) {
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
                         Icon(
-                            Icons.Outlined.Share,
-                            contentDescription = "Share ${server.remarks}",
-                            modifier = Modifier.size(17.dp),
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = "Actions for ${server.remarks}",
+                            modifier = Modifier.size(19.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    IconButton(
-                        onClick = onEdit,
-                        modifier = Modifier.size(40.dp)
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
                     ) {
-                        Icon(
-                            Icons.Outlined.Edit,
-                            contentDescription = "Edit ${server.remarks}",
-                            modifier = Modifier.size(17.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        DropdownMenuItem(
+                            text = { Text("Edit") },
+                            leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
+                            }
                         )
-                    }
-                    IconButton(
-                        onClick = onDelete,
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            Icons.Outlined.DeleteOutline,
-                            contentDescription = "Delete ${server.remarks}",
-                            modifier = Modifier.size(17.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        DropdownMenuItem(
+                            text = { Text("Share") },
+                            leadingIcon = { Icon(Icons.Outlined.Share, null) },
+                            onClick = {
+                                showMenu = false
+                                onShare()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Test Delay") },
+                            leadingIcon = { Icon(Icons.Outlined.Speed, null) },
+                            onClick = {
+                                showMenu = false
+                                onTestDelay()
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
                         )
                     }
                 }
@@ -1035,35 +1274,33 @@ private fun ServerProfileCard(
 }
 
 @Composable
-private fun ProtocolBadge(protocol: ProtocolType) {
+private fun MinimalProtocolTag(protocol: ProtocolType) {
     val isDark = LocalIsDarkTheme.current
-    val accent = when (protocol) {
-        ProtocolType.AMIR -> PumpkinYellow
-        ProtocolType.VLESS -> IndigoProtocol
-        ProtocolType.VMESS -> BlueProtocol
-        ProtocolType.TROJAN -> AmberLatency
-        ProtocolType.WIREGUARD -> EmeraldConnected
-        ProtocolType.HYSTERIA2 -> PurpleReality
-        ProtocolType.SHADOWSOCKS -> TealProtocol
+    val isAmir = protocol == ProtocolType.AMIR
+    val textColor = when {
+        isAmir && isDark -> PumpkinYellow
+        isAmir -> PumpkinYellowDeep
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val isAccentStrong = protocol == ProtocolType.AMIR
-    val textColor = if (isAccentStrong) {
-        if (isDark) PumpkinYellow else PumpkinYellowDeep
-    } else {
-        accent
+    val containerColor = when {
+        isAmir -> PumpkinYellow.copy(alpha = 0.12f)
+        else -> MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.75f)
+    }
+    val borderColor = when {
+        isAmir -> PumpkinYellow.copy(alpha = 0.55f)
+        else -> MaterialTheme.colorScheme.outlineVariant
     }
     Surface(
-        color = accent.copy(alpha = if (isAccentStrong) 0.16f else 0.11f),
-        shape = RoundedCornerShape(6.dp),
-        border = BorderStroke(0.75.dp, accent.copy(alpha = if (isAccentStrong) 0.55f else 0.3f))
+        color = containerColor,
+        shape = RoundedCornerShape(5.dp),
+        border = BorderStroke(0.65.dp, borderColor)
     ) {
         Text(
             text = protocol.displayName.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             color = textColor,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+            fontWeight = if (isAmir) FontWeight.Bold else FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
         )
     }
 }
@@ -1077,19 +1314,17 @@ private fun LatencyBadge(latencyMs: Long, onClick: () -> Unit) {
         latencyMs < 900 -> "${latencyMs} ms" to AmberLatency
         else -> "${latencyMs} ms" to CoralError
     }
-    Surface(
-        color = color.copy(alpha = 0.1f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(0.75.dp, color.copy(alpha = 0.3f)),
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
             .minimumInteractiveComponentSize()
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             if (latencyMs != ServerConfig.UNTESTED_LATENCY) {
                 Box(
@@ -1102,14 +1337,15 @@ private fun LatencyBadge(latencyMs: Long, onClick: () -> Unit) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
-                color = color
+                color = color,
+                fontWeight = if (latencyMs >= 0) FontWeight.SemiBold else FontWeight.Normal
             )
         }
     }
 }
 
 @Composable
-private fun CompactServerGridCard(
+private fun MinimalServerGridCard(
     server: ServerConfig,
     isSelected: Boolean,
     isConnected: Boolean,
@@ -1119,25 +1355,25 @@ private fun CompactServerGridCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val isDark = LocalIsDarkTheme.current
+    val activeAccent = if (isDark) PumpkinYellow else PumpkinYellowDeep
     val indicatorColor by animateColorAsState(
         targetValue = when {
             isConnected -> EmeraldConnected
-            isSelected -> MaterialTheme.colorScheme.primary
+            isSelected -> activeAccent
             else -> Color.Transparent
         },
         label = "gridIndicatorColor"
     )
-    val cardContainer = when {
-        isConnected -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f)
-        isSelected -> MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f)
-        else -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.93f)
-    }
+    val cardContainer = MaterialTheme.colorScheme.surface.copy(
+        alpha = if (isSelected || isConnected) 0.84f else 0.76f
+    )
     val cardBorder = BorderStroke(
-        width = if (isSelected || isConnected) 1.25.dp else 1.dp,
+        width = if (isSelected || isConnected) 1.2.dp else 0.8.dp,
         color = when {
             isConnected -> EmeraldConnected.copy(alpha = 0.65f)
-            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            else -> MaterialTheme.colorScheme.outlineVariant
+            isSelected -> activeAccent.copy(alpha = 0.65f)
+            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
         }
     )
     var showCardMenu by remember { mutableStateOf(false) }
@@ -1155,7 +1391,7 @@ private fun CompactServerGridCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(3.5.dp)
+                    .height(2.5.dp)
                     .background(indicatorColor)
             )
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -1164,10 +1400,10 @@ private fun CompactServerGridCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    ProtocolBadge(server.protocol)
+                    MinimalProtocolTag(server.protocol)
                     LatencyBadge(latencyMs = server.latencyMs, onClick = onTestDelay)
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = server.remarks,
                     style = MaterialTheme.typography.titleSmall,
@@ -1175,7 +1411,7 @@ private fun CompactServerGridCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(3.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1192,7 +1428,7 @@ private fun CompactServerGridCard(
                     Box {
                         IconButton(
                             onClick = { showCardMenu = true },
-                            modifier = Modifier.size(34.dp)
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 Icons.Outlined.MoreVert,
@@ -1317,278 +1553,38 @@ private fun ConnectionInfoDialog(
 }
 
 @Composable
-private fun VpnBottomControlDock(
-    connectionState: ConnectionState,
-    activeRemarks: String,
-    speedDisplayEnabled: Boolean,
-    activeSocksPort: Int?,
-    uplinkBps: Long,
-    downlinkBps: Long,
-    totalUpload: Long,
-    totalDownload: Long,
-    lastTestedDelay: Long?,
-    isTestingDelay: Boolean,
-    onTapStatusTest: () -> Unit,
-    onTestConnectionInfo: () -> Unit,
-    onToggleConnect: () -> Unit
-) {
-    val isConnected = connectionState == ConnectionState.CONNECTED
-    val isBusy = connectionState == ConnectionState.CONNECTING || connectionState == ConnectionState.DISCONNECTING
-    val fabContainer by animateColorAsState(
-        targetValue = when (connectionState) {
-            ConnectionState.CONNECTED -> EmeraldConnected
-            ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
-            ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.primary
-        },
-        label = "fabColor"
-    )
-    val dockAccent by animateColorAsState(
-        targetValue = when (connectionState) {
-            ConnectionState.CONNECTED -> EmeraldConnected
-            ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
-            ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outlineVariant
-        },
-        label = "dockAccent"
-    )
-
-    val pulseTransition = rememberInfiniteTransition(label = "statusPulse")
-    val pulseAlpha by pulseTransition.animateFloat(
-        initialValue = 0.25f,
-        targetValue = 0.75f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseAlpha"
-    )
-
-    Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (isConnected || isBusy) dockAccent.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant
-        ),
-        shadowElevation = 6.dp,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        val statusGlowColor = if (isConnected) EmeraldConnected.copy(alpha = 0.12f) else Color.Transparent
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .drawBehind {
-                    if (isConnected) {
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(statusGlowColor, Color.Transparent),
-                                center = Offset(size.width * 0.22f, size.height * 0.5f),
-                                radius = size.width * 0.45f
-                            ),
-                            center = Offset(size.width * 0.22f, size.height * 0.5f),
-                            radius = size.width * 0.45f
-                        )
-                    }
-                }
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable(enabled = isConnected, onClick = onTapStatusTest)
-                    .padding(end = 10.dp, top = 4.dp, bottom = 4.dp)
-                    .testTag("bottom_status_bar")
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val dotColor = when (connectionState) {
-                        ConnectionState.CONNECTED -> EmeraldConnected
-                        ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> AmberLatency
-                        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.outline
-                    }
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(14.dp)
-                    ) {
-                        if (isConnected || isBusy) {
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .clip(CircleShape)
-                                    .background(dotColor.copy(alpha = pulseAlpha * 0.4f))
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(dotColor)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    val statusLabel = when (connectionState) {
-                        ConnectionState.DISCONNECTED -> stringResource(R.string.status_not_connected)
-                        ConnectionState.CONNECTING -> stringResource(R.string.status_connecting)
-                        ConnectionState.DISCONNECTING -> stringResource(R.string.status_disconnecting)
-                        ConnectionState.CONNECTED -> when {
-                            isTestingDelay -> stringResource(R.string.checking_connection)
-                            lastTestedDelay != null && lastTestedDelay >= 0 -> stringResource(R.string.connected_delay_ms, lastTestedDelay)
-                            lastTestedDelay != null && lastTestedDelay < 0 -> stringResource(R.string.connected_timeout)
-                            else -> stringResource(R.string.tap_to_test)
-                        }
-                    }
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(modifier = Modifier.height(5.dp))
-                if (isConnected) {
-                    val subStatus = buildString {
-                        if (speedDisplayEnabled) {
-                            append("↑ ${XrayVpnService.formatSpeed(uplinkBps)} (${XrayVpnService.formatBytes(totalUpload)})  ")
-                            append("↓ ${XrayVpnService.formatSpeed(downlinkBps)} (${XrayVpnService.formatBytes(totalDownload)})")
-                        } else {
-                            append(activeRemarks.ifBlank { "PalaNG" })
-                        }
-                        if (activeSocksPort != null) {
-                            append("  • :$activeSocksPort")
-                        }
-                    }
-                    Text(
-                        text = subStatus,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                } else {
-                    Text(
-                        text = if (activeRemarks.isNotBlank()) stringResource(R.string.selected_server, activeRemarks) else stringResource(R.string.no_server_selected),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            if (isConnected) {
-                IconButton(
-                    onClick = onTestConnectionInfo,
-                    modifier = Modifier.testTag("connection_info_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Public,
-                        contentDescription = stringResource(R.string.menu_connection_info),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
-            val fabContentColor = when (connectionState) {
-                ConnectionState.CONNECTED -> Color.White
-                ConnectionState.CONNECTING, ConnectionState.DISCONNECTING -> Color(0xFF211300)
-                ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onPrimary
-            }
-            FloatingActionButton(
-                onClick = onToggleConnect,
-                shape = RoundedCornerShape(16.dp),
-                containerColor = fabContainer,
-                contentColor = fabContentColor,
-                elevation = FloatingActionButtonDefaults.elevation(
-                    defaultElevation = 2.dp,
-                    pressedElevation = 4.dp
-                ),
-                modifier = Modifier
-                    .width(64.dp)
-                    .height(52.dp)
-                    .testTag("vpn_connect_fab")
-            ) {
-                when {
-                    isBusy -> CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.5.dp,
-                        color = fabContentColor
-                    )
-                    isConnected -> Icon(
-                        imageVector = Icons.Outlined.Stop,
-                        contentDescription = "Disconnect VPN",
-                        modifier = Modifier.size(26.dp)
-                    )
-                    else -> Icon(
-                        imageVector = Icons.Outlined.PlayArrow,
-                        contentDescription = "Connect VPN",
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun EmptyProfilesState(
     onImportClipboard: () -> Unit,
     onScanQr: () -> Unit,
     onManualAdd: () -> Unit
 ) {
-    val glowColor = PumpkinYellow
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .navigationBarsPadding()
             .padding(28.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(116.dp)
-                .drawBehind {
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(glowColor.copy(alpha = 0.28f), Color.Transparent)
-                        ),
-                        radius = size.maxDimension * 0.72f
-                    )
-                }
-        ) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = BrandCanvasDark,
-                border = BorderStroke(1.5.dp, glowColor.copy(alpha = 0.68f)),
-                shadowElevation = 6.dp
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_palang_logo),
-                    contentDescription = "PalaNG logo",
-                    modifier = Modifier
-                        .size(92.dp)
-                        .padding(8.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(20.dp))
+        PalangLineArtLogo(
+            modifier = Modifier.size(90.dp),
+            contentDescription = "PalaNG logo"
+        )
+        Spacer(modifier = Modifier.height(18.dp))
         Text(
             text = stringResource(R.string.empty_profiles_title),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = stringResource(R.string.empty_profiles_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.widthIn(max = 310.dp)
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(22.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically

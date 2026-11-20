@@ -10,21 +10,21 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.EOFException
-import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Inet4Address
-import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketAddress
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -46,12 +46,28 @@ class AmirLocalProxy(
     private val onLog: (String) -> Unit = {}
 ) {
     private val proxyExecutor = Executors.newCachedThreadPool()
+    private val warmPoolExecutor = Executors.newFixedThreadPool(2)
     private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val activeDatagramSockets = ConcurrentHashMap.newKeySet<DatagramSocket>()
+    private val warmPool = ConcurrentLinkedDeque<PooledWsConnection>()
+    private val pendingWarmups = AtomicInteger(0)
+    private val dnsCache = ConcurrentHashMap<String, CachedDnsResponse>()
     private val running = AtomicBoolean(false)
     private val loggedCleanIpFallback = AtomicBoolean(false)
     private val cleanIpFailureCount = AtomicInteger(0)
     private val cleanIpCooldownUntilMs = AtomicLong(0L)
+    private val lastErrorLogMs = AtomicLong(0L)
     private val parsedDnsHosts = XrayConfigBuilder.parseDnsHosts(settings.dnsHosts)
+
+    private data class PooledWsConnection(
+        val conn: DirectWsConnection,
+        val createdAtMs: Long
+    )
+
+    private data class CachedDnsResponse(
+        val payload: ByteArray,
+        val expiresAtMs: Long
+    )
 
     @Volatile
     private var serverSocket: ServerSocket? = null
@@ -89,6 +105,8 @@ class AmirLocalProxy(
     private val cleanIp: String = serverConfig.extraParam2.trim().removePrefix("[").removeSuffix("]")
     private val uuidBytes: ByteArray = serverConfig.passwordOrId.trim().toByteArray(StandardCharsets.UTF_8)
 
+    private val enableWarmPool: Boolean = !isLoopbackHost(workerHost)
+
     fun start(): Int {
         val ss = ServerSocket(0, 1024, InetAddress.getByName("127.0.0.1"))
         serverSocket = ss
@@ -98,6 +116,11 @@ class AmirLocalProxy(
             "Amir standalone core SOCKS5 output listening on 127.0.0.1:$boundPort -> $workerHost" +
                 (if (cleanIp.isNotBlank()) " (CF Clean IP: $cleanIp)" else "")
         )
+
+        // Pre-warm TLS + WebSocket connections so first browser requests skip multi-RTT setup
+        if (enableWarmPool && uuidBytes.isNotEmpty() && workerHost.isNotBlank()) {
+            scheduleWarmPoolRefill(targetCount = INITIAL_WARM_POOL_SIZE)
+        }
 
         proxyExecutor.execute {
             while (running.get() && !ss.isClosed) {
@@ -118,11 +141,74 @@ class AmirLocalProxy(
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
+        while (true) {
+            val pooled = warmPool.pollFirst() ?: break
+            activeSockets.remove(pooled.conn.socket)
+            runCatching { pooled.conn.socket.close() }
+        }
         activeSockets.forEach { sock ->
             runCatching { sock.close() }
         }
         activeSockets.clear()
+        activeDatagramSockets.forEach { ds ->
+            runCatching { ds.close() }
+        }
+        activeDatagramSockets.clear()
+        dnsCache.clear()
+        runCatching { warmPoolExecutor.shutdownNow() }
         runCatching { proxyExecutor.shutdownNow() }
+    }
+
+    private fun scheduleWarmPoolRefill(targetCount: Int = MAX_WARM_POOL_SIZE) {
+        if (!enableWarmPool || !running.get() || warmPoolExecutor.isShutdown) return
+        val currentSize = warmPool.size + pendingWarmups.get()
+        val needed = (targetCount - currentSize).coerceAtLeast(0)
+        repeat(needed) {
+            if (pendingWarmups.incrementAndGet() > MAX_WARM_POOL_SIZE + 1) {
+                pendingWarmups.decrementAndGet()
+                return
+            }
+            runCatching {
+                warmPoolExecutor.execute {
+                    try {
+                        if (!running.get()) return@execute
+                        val conn = dialBestWebSocket() ?: return@execute
+                        if (!running.get() || warmPool.size >= MAX_WARM_POOL_SIZE) {
+                            activeSockets.remove(conn.socket)
+                            runCatching { conn.socket.close() }
+                            return@execute
+                        }
+                        warmPool.offerLast(PooledWsConnection(conn, System.currentTimeMillis()))
+                    } catch (_: Exception) {
+                    } finally {
+                        pendingWarmups.decrementAndGet()
+                    }
+                }
+            }.onFailure {
+                pendingWarmups.decrementAndGet()
+            }
+        }
+    }
+
+    private fun obtainWebSocket(): DirectWsConnection? {
+        val now = System.currentTimeMillis()
+        while (true) {
+            val candidate = warmPool.pollFirst() ?: break
+            val age = now - candidate.createdAtMs
+            val alive = !candidate.conn.socket.isClosed &&
+                candidate.conn.socket.isConnected &&
+                age in 0L..WARM_POOL_MAX_AGE_MS
+            if (alive) {
+                scheduleWarmPoolRefill()
+                return candidate.conn
+            } else {
+                activeSockets.remove(candidate.conn.socket)
+                runCatching { candidate.conn.socket.close() }
+            }
+        }
+        val direct = dialBestWebSocket()
+        scheduleWarmPoolRefill()
+        return direct
     }
 
     private fun handleSocksClient(localSocket: Socket) {
@@ -151,16 +237,10 @@ class AmirLocalProxy(
             localOut.write(byteArrayOf(0x05, 0x00))
             localOut.flush()
 
-            // 2. SOCKS5 Connect Request (only CONNECT 0x01 supported)
+            // 2. SOCKS5 Request: CONNECT (0x01) or UDP ASSOCIATE (0x03 for DNS port 53)
             val req = readExactBytes(localIn, 4)
             if (req[0].toInt() != 5) return
-            if (req[1].toInt() != 1) {
-                runCatching {
-                    localOut.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    localOut.flush()
-                }
-                return
-            }
+            val cmd = req[1].toInt() and 0xFF
             val atyp = req[3].toInt() and 0xFF
             val targetHost = when (atyp) {
                 1 -> {
@@ -186,8 +266,28 @@ class AmirLocalProxy(
             val portBytes = readExactBytes(localIn, 2)
             val targetPort = ((portBytes[0].toInt() and 0xFF) shl 8) or (portBytes[1].toInt() and 0xFF)
 
-            // 3. Open direct TLS + RFC-6455 WebSocket to Cloudflare Worker (matches Cl4.py)
-            wsConn = openWebSocket()
+            if (cmd == 3) {
+                handleSocksUdpAssociate(localSocket, localIn, localOut)
+                return
+            }
+
+            if (cmd != 1) {
+                runCatching {
+                    localOut.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    localOut.flush()
+                }
+                return
+            }
+
+            // Cloudflare Workers connect() forbids connecting to Cloudflare's own 1.1.1.1/1.0.0.1 IPs
+            val dialHost = if (targetPort == 53 && isCloudflareResolverIp(targetHost)) {
+                "8.8.8.8"
+            } else {
+                targetHost
+            }
+
+            // 3. Obtain WebSocket from pre-warmed pool or dial directly
+            wsConn = obtainWebSocket()
             if (wsConn == null) {
                 runCatching {
                     localOut.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
@@ -196,21 +296,44 @@ class AmirLocalProxy(
                 return
             }
 
-            // 4. Send Amir init packet
-            val (initPacket, key) = buildInitPacket(uuidBytes, targetHost, targetPort)
-            wsConn.sendBinaryFrame(initPacket, 0, initPacket.size, mask = null)
-            wsConn.out.flush()
+            // 4. Send Amir init packet (retry once with fresh dial if pooled WS had gone stale)
+            val (initPacket, key) = buildInitPacket(uuidBytes, dialHost, targetPort)
+            var ackBytes: ByteArray? = null
+            var activeKey = key
+            try {
+                wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
+                wsConn.out.flush()
+                ackBytes = wsConn.readMessageBytes()
+            } catch (_: Exception) {
+                activeSockets.remove(wsConn.socket)
+                runCatching { wsConn.socket.close() }
+                wsConn = dialBestWebSocket()
+                if (wsConn != null) {
+                    val (retryInit, retryKey) = buildInitPacket(uuidBytes, dialHost, targetPort)
+                    activeKey = retryKey
+                    wsConn.sendBinaryFrame(retryInit, 0, retryInit.size)
+                    wsConn.out.flush()
+                    ackBytes = wsConn.readMessageBytes()
+                }
+            }
 
-            // 5. Receive and verify HMAC("OK") acknowledgement (at least 16 bytes)
-            val ack = wsConn.readMessageBytes()
-            if (ack == null || ack.size < 16) return
-            val decryptedAck = xorBytes(ack, key)
-            val expectedAck = hmacSha256(key, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
-            if (decryptedAck.size < 16 || !MessageDigest.isEqual(decryptedAck.copyOfRange(0, 16), expectedAck)) {
+            if (wsConn == null || ackBytes == null || ackBytes.size < 16) {
+                emitThrottledError("Amir tunnel handshake failed for $dialHost:$targetPort")
+                runCatching {
+                    localOut.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                    localOut.flush()
+                }
                 return
             }
 
-            // Switch both sockets to infinite idle timeout for long-lived streams (e.g., Telegram MTProto)
+            val decryptedAck = xorBytes(ackBytes, activeKey)
+            val expectedAck = hmacSha256(activeKey, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
+            if (decryptedAck.size < 16 || !MessageDigest.isEqual(decryptedAck.copyOfRange(0, 16), expectedAck)) {
+                emitThrottledError("Amir HMAC ACK mismatch for $dialHost:$targetPort")
+                return
+            }
+
+            // Switch both sockets to infinite idle timeout for long-lived streams
             localSocket.soTimeout = 0
             wsConn.socket.soTimeout = 0
 
@@ -218,20 +341,225 @@ class AmirLocalProxy(
             localOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             localOut.flush()
 
-            // 7. Full-duplex zero-allocation XOR relay
+            // 7. Full-duplex XOR relay (keep WS alive until downlink completes so half-closed HTTP responses drain cleanly)
+            val boundWs = wsConn
             val upFuture = proxyExecutor.submit {
-                relayUp(localIn, wsConn, key)
+                relayUp(localIn, boundWs, activeKey)
             }
-            relayDown(wsConn, localOut, key)
+            relayDown(boundWs, localOut, activeKey)
             runCatching { upFuture.cancel(false) }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            emitThrottledError("Amir proxy connection error: ${e.message}")
         } finally {
             activeSockets.remove(localSocket)
             wsConn?.let { conn ->
                 activeSockets.remove(conn.socket)
+                runCatching {
+                    if (!conn.socket.isClosed) {
+                        synchronized(conn.writeLock) {
+                            conn.sendCloseFrame()
+                            conn.out.flush()
+                        }
+                    }
+                }
                 runCatching { conn.socket.close() }
             }
             runCatching { localSocket.close() }
+        }
+    }
+
+    private fun handleSocksUdpAssociate(
+        controlSocket: Socket,
+        controlIn: InputStream,
+        controlOut: OutputStream
+    ) {
+        val udpSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        activeDatagramSockets.add(udpSocket)
+        try {
+            val udpPort = udpSocket.localPort
+            val bindReply = byteArrayOf(
+                0x05, 0x00, 0x00, 0x01,
+                127, 0, 0, 1,
+                ((udpPort ushr 8) and 0xFF).toByte(),
+                (udpPort and 0xFF).toByte()
+            )
+            controlOut.write(bindReply)
+            controlOut.flush()
+            controlSocket.soTimeout = 0
+
+            // Close UDP association cleanly when TCP control socket closes
+            val controlWatcher = proxyExecutor.submit {
+                try {
+                    val buf = ByteArray(64)
+                    while (running.get() && !controlSocket.isClosed) {
+                        if (controlIn.read(buf) < 0) break
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    runCatching { udpSocket.close() }
+                }
+            }
+
+            val recvBuf = ByteArray(4096)
+            while (running.get() && !udpSocket.isClosed && !controlSocket.isClosed) {
+                val packet = DatagramPacket(recvBuf, recvBuf.size)
+                try {
+                    udpSocket.receive(packet)
+                } catch (_: Exception) {
+                    break
+                }
+                val copy = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
+                val clientAddr = packet.socketAddress
+                proxyExecutor.execute {
+                    processSocksUdpDnsPacket(udpSocket, clientAddr, copy)
+                }
+            }
+            runCatching { controlWatcher.cancel(true) }
+        } finally {
+            activeDatagramSockets.remove(udpSocket)
+            runCatching { udpSocket.close() }
+        }
+    }
+
+    private fun processSocksUdpDnsPacket(
+        udpSocket: DatagramSocket,
+        clientAddr: java.net.SocketAddress,
+        rawPacket: ByteArray
+    ) {
+        if (rawPacket.size < 10) return
+        val frag = rawPacket[2].toInt() and 0xFF
+        if (frag != 0) return
+
+        val atyp = rawPacket[3].toInt() and 0xFF
+        var idx = 4
+        val dstHost: String
+        when (atyp) {
+            1 -> {
+                if (rawPacket.size < idx + 6) return
+                dstHost = InetAddress.getByAddress(rawPacket.copyOfRange(idx, idx + 4)).hostAddress ?: return
+                idx += 4
+            }
+            3 -> {
+                if (rawPacket.size < idx + 1) return
+                val len = rawPacket[idx].toInt() and 0xFF
+                idx++
+                if (rawPacket.size < idx + len + 2) return
+                dstHost = String(rawPacket, idx, len, StandardCharsets.UTF_8)
+                idx += len
+            }
+            4 -> {
+                if (rawPacket.size < idx + 18) return
+                dstHost = InetAddress.getByAddress(rawPacket.copyOfRange(idx, idx + 16)).hostAddress ?: return
+                idx += 16
+            }
+            else -> return
+        }
+        val dstPort = ((rawPacket[idx].toInt() and 0xFF) shl 8) or (rawPacket[idx + 1].toInt() and 0xFF)
+        idx += 2
+
+        // Only DNS (port 53) can be tunneled over AMIR's TCP-over-WS transport
+        if (dstPort != 53) return
+
+        val socksHeader = rawPacket.copyOfRange(0, idx)
+        val dnsQuery = rawPacket.copyOfRange(idx, rawPacket.size)
+        if (dnsQuery.size < 12) return
+
+        val cacheKey = extractDnsQuestionCacheKey(dnsQuery)
+        if (cacheKey != null) {
+            val cached = dnsCache[cacheKey]
+            val now = System.currentTimeMillis()
+            if (cached != null && now < cached.expiresAtMs && cached.payload.size >= 12) {
+                val replyDns = cached.payload.copyOf()
+                replyDns[0] = dnsQuery[0]
+                replyDns[1] = dnsQuery[1]
+                sendSocksUdpReply(udpSocket, clientAddr, socksHeader, replyDns)
+                return
+            }
+        }
+
+        // Redirect 1.1.1.1 / 1.0.0.1 to 8.8.8.8 so Cloudflare Worker connect() succeeds,
+        // while keeping original socksHeader so Android/Xray matches the UDP 5-tuple.
+        val dialDnsHost = if (isCloudflareResolverIp(dstHost)) "8.8.8.8" else dstHost
+        val dnsResp = queryDnsOverAmirTcp(dialDnsHost, 53, dnsQuery) ?: return
+        if (cacheKey != null && dnsResp.size >= 12) {
+            val rcode = dnsResp[3].toInt() and 0x0F
+            if (rcode == 0) {
+                dnsCache[cacheKey] = CachedDnsResponse(
+                    payload = dnsResp.copyOf(),
+                    expiresAtMs = System.currentTimeMillis() + DNS_CACHE_TTL_MS
+                )
+            }
+        }
+        sendSocksUdpReply(udpSocket, clientAddr, socksHeader, dnsResp)
+    }
+
+    private fun queryDnsOverAmirTcp(dnsHost: String, dnsPort: Int, dnsQuery: ByteArray): ByteArray? {
+        var wsConn: DirectWsConnection? = null
+        try {
+            wsConn = obtainWebSocket() ?: return null
+            val (initPacket, key) = buildInitPacket(uuidBytes, dnsHost, dnsPort)
+            wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
+            wsConn.out.flush()
+
+            val ack = wsConn.readMessageBytes() ?: return null
+            if (ack.size < 16) return null
+            val decAck = xorBytes(ack, key)
+            val expAck = hmacSha256(key, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
+            if (!MessageDigest.isEqual(decAck.copyOfRange(0, 16), expAck)) return null
+
+            // DNS-over-TCP (RFC 1035 Section 4.2.2): 2-byte big-endian length prefix + message
+            val tcpDnsReq = ByteArray(2 + dnsQuery.size)
+            tcpDnsReq[0] = ((dnsQuery.size ushr 8) and 0xFF).toByte()
+            tcpDnsReq[1] = (dnsQuery.size and 0xFF).toByte()
+            System.arraycopy(dnsQuery, 0, tcpDnsReq, 2, dnsQuery.size)
+
+            val encReq = xorBytes(tcpDnsReq, key)
+            wsConn.sendBinaryFrame(encReq, 0, encReq.size)
+            wsConn.out.flush()
+
+            var keyOffset = 0
+            val accumulated = java.io.ByteArrayOutputStream(512)
+            while (accumulated.size() < 2) {
+                val frame = wsConn.readMessageBytes() ?: break
+                val dec = xorBytesWithOffset(frame, key, keyOffset)
+                keyOffset = (keyOffset + frame.size) and 15
+                accumulated.write(dec)
+            }
+            var raw = accumulated.toByteArray()
+            if (raw.size < 2) return null
+            val expectedLen = ((raw[0].toInt() and 0xFF) shl 8) or (raw[1].toInt() and 0xFF)
+            if (expectedLen <= 0 || expectedLen > 8192) return null
+
+            while (accumulated.size() < 2 + expectedLen) {
+                val frame = wsConn.readMessageBytes() ?: break
+                val dec = xorBytesWithOffset(frame, key, keyOffset)
+                keyOffset = (keyOffset + frame.size) and 15
+                accumulated.write(dec)
+            }
+            raw = accumulated.toByteArray()
+            if (raw.size < 2 + expectedLen) return null
+            return raw.copyOfRange(2, 2 + expectedLen)
+        } catch (_: Exception) {
+            return null
+        } finally {
+            wsConn?.let { conn ->
+                activeSockets.remove(conn.socket)
+                runCatching { conn.socket.close() }
+            }
+        }
+    }
+
+    private fun sendSocksUdpReply(
+        udpSocket: DatagramSocket,
+        clientAddr: java.net.SocketAddress,
+        socksHeader: ByteArray,
+        dnsResponse: ByteArray
+    ) {
+        val out = ByteArray(socksHeader.size + dnsResponse.size)
+        System.arraycopy(socksHeader, 0, out, 0, socksHeader.size)
+        System.arraycopy(dnsResponse, 0, out, socksHeader.size, dnsResponse.size)
+        runCatching {
+            udpSocket.send(DatagramPacket(out, out.size, clientAddr))
         }
     }
 
@@ -244,7 +572,6 @@ class AmirLocalProxy(
         val combinedXor = ByteArray(16)
         val mask = ByteArray(4)
         var maskSeed = System.nanoTime() xor (Thread.currentThread().id shl 16) xor -0x61c8864680b583ebL
-        var hadWriteError = false
         try {
             while (running.get() && !wsConn.socket.isClosed) {
                 val read = localIn.read(frameBuf, WS_MAX_HEADER_BYTES, MAX_CHUNK)
@@ -259,7 +586,6 @@ class AmirLocalProxy(
                 mask[2] = ((maskSeed ushr 16) and 0xFF).toByte()
                 mask[3] = ((maskSeed ushr 24) and 0xFF).toByte()
 
-                // Combine 16-byte XOR stream key and 4-byte WS mask in a single pass (16 is divisible by 4)
                 for (i in 0 until 16) {
                     combinedXor[i] = (key[i].toInt() xor mask[i and 3].toInt()).toByte()
                 }
@@ -300,17 +626,9 @@ class AmirLocalProxy(
                 }
             }
         } catch (_: Exception) {
-            hadWriteError = true
-        } finally {
-            if (!hadWriteError && !wsConn.socket.isClosed) {
-                runCatching {
-                    synchronized(wsConn.writeLock) {
-                        wsConn.sendCloseFrame()
-                        wsConn.out.flush()
-                    }
-                }
-            }
         }
+        // Do NOT send WS Close (0x88) here on uplink EOF!
+        // Half-closed HTTP/TLS clients still expect relayDown() to receive the server response.
     }
 
     private fun relayDown(
@@ -374,15 +692,14 @@ class AmirLocalProxy(
                         extra -= skipped
                     }
                     when (opcode) {
-                        8 -> break // WebSocket Close
+                        8 -> break
                         9 -> {
-                            // Reply Pong immediately
                             synchronized(wsConn.writeLock) {
                                 wsConn.sendControlPong(ctrlBuf, ctrlLen)
                                 wsConn.out.flush()
                             }
                         }
-                        else -> Unit // Pong / unknown control
+                        else -> Unit
                     }
                     continue
                 }
@@ -425,7 +742,7 @@ class AmirLocalProxy(
         }
     }
 
-    private fun openWebSocket(): DirectWsConnection? {
+    private fun dialBestWebSocket(): DirectWsConnection? {
         if (cleanIp.isNotBlank() && System.currentTimeMillis() >= cleanIpCooldownUntilMs.get()) {
             val cleanResult = runCatching { dialDirectWebSocket(cleanIp, CLEAN_IP_CONNECT_TIMEOUT_MS) }
             val conn = cleanResult.getOrNull()
@@ -440,11 +757,24 @@ class AmirLocalProxy(
                 emitInfo("Amir CF Clean IP ($cleanIp) dial failed (${cleanResult.exceptionOrNull()?.message}), falling back to direct host")
             }
         }
-        return runCatching { dialDirectWebSocket(workerHost, DIRECT_CONNECT_TIMEOUT_MS) }.getOrNull()
+        return runCatching { dialDirectWebSocket(workerHost, DIRECT_CONNECT_TIMEOUT_MS) }
+            .onFailure { err ->
+                emitThrottledError("Amir WebSocket dial failed: ${err.message}")
+            }
+            .getOrNull()
     }
 
     private fun emitInfo(msg: String) {
         if (settings.logLevel != "none" && settings.logLevel != "error") {
+            onLog(msg)
+        }
+    }
+
+    private fun emitThrottledError(msg: String) {
+        if (settings.logLevel == "none") return
+        val now = System.currentTimeMillis()
+        val prev = lastErrorLogMs.get()
+        if (now - prev >= 4_000L && lastErrorLogMs.compareAndSet(prev, now)) {
             onLog(msg)
         }
     }
@@ -470,8 +800,10 @@ class AmirLocalProxy(
         var socketToTrack: Socket = rawSocket
         activeSockets.add(rawSocket)
         try {
-            rawSocket.tcpNoDelay = true // Forces SocketImpl FD creation before protect()
+            rawSocket.tcpNoDelay = true
             rawSocket.keepAlive = true
+            rawSocket.receiveBufferSize = IO_BUFFER_SIZE
+            rawSocket.sendBufferSize = IO_BUFFER_SIZE
             val targetAddr = resolveConnectAddress(connectTarget)
             protectSocket(rawSocket)
             rawSocket.connect(InetSocketAddress(targetAddr, workerPort), connectTimeoutMs)
@@ -505,7 +837,6 @@ class AmirLocalProxy(
             val wsIn = BufferedInputStream(finalSocket.getInputStream(), IO_BUFFER_SIZE)
             val wsOut = BufferedOutputStream(finalSocket.getOutputStream(), IO_BUFFER_SIZE)
 
-            // RFC-6455 HTTP/1.1 Upgrade (compression=None, exact match to Cl4.py)
             val keyNonce = ByteArray(16).also { random.nextBytes(it) }
             val wsKey = Base64.encodeToString(keyNonce, Base64.NO_WRAP)
             val upgradeReq = buildString {
@@ -554,7 +885,6 @@ class AmirLocalProxy(
             throw t
         }
     }
-
 
     private class DirectWsConnection(
         val socket: Socket,
@@ -678,7 +1008,7 @@ class AmirLocalProxy(
         val startMs = System.currentTimeMillis()
         var wsConn: DirectWsConnection? = null
         try {
-            wsConn = openWebSocket() ?: return@withContext -1L
+            wsConn = dialBestWebSocket() ?: return@withContext -1L
             val (initPacket, key) = buildInitPacket(uuidBytes, targetHost, targetPort)
             wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
             wsConn.out.flush()
@@ -718,9 +1048,13 @@ class AmirLocalProxy(
         const val MAX_CHUNK = 16384
         private const val WS_MAX_HEADER_BYTES = 14
         private const val IO_BUFFER_SIZE = 65536
-        private const val HANDSHAKE_TIMEOUT_MS = 10_000
-        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 6_000
-        private const val DIRECT_CONNECT_TIMEOUT_MS = 10_000
+        private const val INITIAL_WARM_POOL_SIZE = 3
+        private const val MAX_WARM_POOL_SIZE = 4
+        private const val WARM_POOL_MAX_AGE_MS = 18_000L
+        private const val DNS_CACHE_TTL_MS = 120_000L
+        private const val HANDSHAKE_TIMEOUT_MS = 8_000
+        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 3_000
+        private const val DIRECT_CONNECT_TIMEOUT_MS = 5_000
         private const val CLEAN_IP_COOLDOWN_MS = 30_000L
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private val random = SecureRandom()
@@ -729,11 +1063,45 @@ class AmirLocalProxy(
                 val ctx = SSLContext.getInstance("TLS")
                 ctx.init(null, null, random)
                 ctx.clientSessionContext?.apply {
-                    sessionCacheSize = 64
-                    sessionTimeout = 300
+                    sessionCacheSize = 128
+                    sessionTimeout = 600
                 }
                 ctx.socketFactory
             }.getOrElse { SSLSocketFactory.getDefault() as SSLSocketFactory }
+        }
+
+        private fun isLoopbackHost(host: String): Boolean {
+            return host == "127.0.0.1" || host.equals("localhost", ignoreCase = true) || host == "::1"
+        }
+
+        private fun isCloudflareResolverIp(host: String): Boolean {
+            return host == "1.1.1.1" || host == "1.0.0.1" ||
+                host.equals("2606:4700:4700::1111", ignoreCase = true) ||
+                host.equals("2606:4700:4700::1001", ignoreCase = true)
+        }
+
+        private fun extractDnsQuestionCacheKey(dns: ByteArray): String? {
+            if (dns.size < 17) return null
+            val qdCount = ((dns[4].toInt() and 0xFF) shl 8) or (dns[5].toInt() and 0xFF)
+            if (qdCount != 1) return null
+            var idx = 12
+            val name = StringBuilder(64)
+            var jumps = 0
+            while (idx < dns.size && jumps++ < 64) {
+                val len = dns[idx].toInt() and 0xFF
+                if (len == 0) {
+                    idx++
+                    break
+                }
+                if ((len and 0xC0) != 0 || idx + 1 + len > dns.size) return null
+                if (name.isNotEmpty()) name.append('.')
+                name.append(String(dns, idx + 1, len, StandardCharsets.US_ASCII).lowercase())
+                idx += 1 + len
+            }
+            if (idx + 4 > dns.size || name.isEmpty()) return null
+            val qtype = ((dns[idx].toInt() and 0xFF) shl 8) or (dns[idx + 1].toInt() and 0xFF)
+            val qclass = ((dns[idx + 2].toInt() and 0xFF) shl 8) or (dns[idx + 3].toInt() and 0xFF)
+            return "$name:$qtype:$qclass"
         }
 
         fun deriveKey(uuidBytes: ByteArray, nonce: ByteArray): ByteArray {
@@ -783,7 +1151,6 @@ class AmirLocalProxy(
             if (cleanHost.contains(":")) {
                 val bytes = runCatching { InetAddress.getByName(cleanHost).address }.getOrNull()
                 if (bytes != null && bytes.size == 16) {
-                    // Cl4 protocol uses address type 3 for IPv6
                     return 3.toByte() to bytes
                 }
             }
@@ -814,6 +1181,17 @@ class AmirLocalProxy(
             val kLen = key.size
             for (i in data.indices) {
                 out[i] = (data[i].toInt() xor key[i % kLen].toInt()).toByte()
+            }
+            return out
+        }
+
+        private fun xorBytesWithOffset(data: ByteArray, key: ByteArray, initialOffset: Int): ByteArray {
+            val out = ByteArray(data.size)
+            val kLen = key.size
+            var k = initialOffset % kLen
+            for (i in data.indices) {
+                out[i] = (data[i].toInt() xor key[k].toInt()).toByte()
+                k = (k + 1) % kLen
             }
             return out
         }

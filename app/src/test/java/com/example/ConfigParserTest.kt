@@ -831,7 +831,7 @@ class ConfigParserTest {
     }
 
     @Test
-    fun `AmirLocalProxy matches cl4 defaults, rejects unsupported auth, accepts padded ACK, and closes WS on EOF`() {
+    fun `AmirLocalProxy matches cl4 defaults, rejects unsupported auth, and accepts padded ACK`() {
         assertEquals("63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd", com.example.core.AmirLocalProxy.DEFAULT_UUID)
         assertEquals("wss://twilight-dream-9e3c.aliahmadiphotoofficial.workers.dev/", com.example.core.AmirLocalProxy.DEFAULT_WORKER_URL)
         assertEquals("172.67.70.244", com.example.core.AmirLocalProxy.DEFAULT_CLEAN_IP)
@@ -840,7 +840,7 @@ class ConfigParserTest {
         val uuidBytes = com.example.core.AmirLocalProxy.DEFAULT_UUID.toByteArray(Charsets.UTF_8)
         val serverSock = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
         val wsPort = serverSock.localPort
-        val gotWsClose = java.util.concurrent.CountDownLatch(1)
+        val verifiedPaddedAck = java.util.concurrent.CountDownLatch(1)
 
         val serverThread = Thread {
             serverSock.accept().use { s ->
@@ -900,9 +900,14 @@ class ConfigParserTest {
                 out.write(encAck)
                 out.flush()
 
-                val (nextOpcode, _) = readWsFrame()
-                if (nextOpcode == 8) {
-                    gotWsClose.countDown()
+                val (_, reqPayload) = readWsFrame()
+                val reqText = String(com.example.core.AmirLocalProxy.xorBytes(reqPayload, key))
+                if (reqText == "PING") {
+                    verifiedPaddedAck.countDown()
+                    val encResp = com.example.core.AmirLocalProxy.xorBytes("PONG".toByteArray(), key)
+                    out.write(0x82)
+                    out.write(encResp.size)
+                    out.write(encResp)
                     out.write(byteArrayOf(0x88.toByte(), 0x00))
                     out.flush()
                 }
@@ -934,7 +939,7 @@ class ConfigParserTest {
                 assertEquals(0xFF, resp[1].toInt() and 0xFF)
             }
 
-            // 2. Accept >=16-byte ACK and emit WS Close frame upon local socket close
+            // 2. Accept >=16-byte ACK and relay data cleanly
             java.net.Socket("127.0.0.1", localPort).use { sock ->
                 sock.soTimeout = 3000
                 val out = sock.getOutputStream()
@@ -942,15 +947,20 @@ class ConfigParserTest {
                 out.write(byteArrayOf(0x05, 0x01, 0x00))
                 out.flush()
                 inp.readFully(ByteArray(2))
-                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, 0xBB.toByte()))
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 8, 8, 8, 8, 0x01, 0xBB.toByte()))
                 out.flush()
                 val rep = ByteArray(10)
                 inp.readFully(rep)
                 assertEquals(0, rep[1].toInt())
+                out.write("PING".toByteArray())
+                out.flush()
+                val body = ByteArray(4)
+                inp.readFully(body)
+                assertEquals("PONG", String(body))
             }
             assertTrue(
-                "Expected AmirLocalProxy to send WS close frame when SOCKS5 client closes",
-                gotWsClose.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                "Expected padded ACK tunnel to relay request cleanly",
+                verifiedPaddedAck.await(3, java.util.concurrent.TimeUnit.SECONDS)
             )
         } finally {
             proxy.stop()
@@ -1077,10 +1087,9 @@ class ConfigParserTest {
                 out.write(encAck)
                 out.flush()
 
-                // Read HTTP request and WS Close frame (from client shutdownOutput)
+                // Read HTTP request; relayUp must NOT emit premature 0x88 when client calls shutdownOutput()
                 val (_, reqPayload) = readWsFrame()
                 val reqText = String(com.example.core.AmirLocalProxy.xorBytes(reqPayload, key))
-                readWsFrame() // client close frame
 
                 // Wait briefly before sending delayed response while client awaits download
                 Thread.sleep(150)
@@ -1127,6 +1136,180 @@ class ConfigParserTest {
 
                 val response = sock.getInputStream().readBytes()
                 assertEquals("HALFCLOSE:GET /", String(response))
+            }
+        } finally {
+            proxy.stop()
+            serverSock.close()
+        }
+    }
+
+    @Test
+    fun `AmirLocalProxy tunnels SOCKS5 UDP DNS over TCP, redirects 1_1_1_1 to 8_8_8_8, and caches responses`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
+        val serverSock = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = serverSock.localPort
+        val dialedDnsHost = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val upstreamCalls = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val serverThread = Thread {
+            serverSock.accept().use { s ->
+                upstreamCalls.incrementAndGet()
+                val inp = java.io.BufferedInputStream(s.getInputStream())
+                val out = s.getOutputStream()
+                var wsKey = ""
+                while (true) {
+                    val sb = StringBuilder()
+                    while (true) {
+                        val c = inp.read()
+                        if (c < 0 || c == '\n'.code) break
+                        if (c != '\r'.code) sb.append(c.toChar())
+                    }
+                    val line = sb.toString()
+                    if (line.isEmpty()) break
+                    if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                        wsKey = line.substringAfter(':').trim()
+                    }
+                }
+                val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                    .digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII))
+                val accept = android.util.Base64.encodeToString(sha1, android.util.Base64.NO_WRAP)
+                out.write(
+                    (
+                        "HTTP/1.1 101 Switching Protocols\r\n" +
+                            "Upgrade: websocket\r\n" +
+                            "Connection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: $accept\r\n" +
+                            "Sec-WebSocket-Protocol: chat.v2\r\n\r\n"
+                        ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+
+                fun readWsFrame(): ByteArray {
+                    inp.read()
+                    val b1 = inp.read()
+                    val masked = (b1 and 0x80) != 0
+                    val len = b1 and 0x7F
+                    val mask = if (masked) ByteArray(4).also { java.io.DataInputStream(inp).readFully(it) } else null
+                    val data = ByteArray(len).also { java.io.DataInputStream(inp).readFully(it) }
+                    if (mask != null) {
+                        for (i in data.indices) data[i] = (data[i].toInt() xor mask[i and 3].toInt()).toByte()
+                    }
+                    return data
+                }
+
+                val init = readWsFrame()
+                val nonce = init.copyOfRange(0, 16)
+                val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, nonce)
+                val encBody = init.copyOfRange(16, init.size - 8)
+                val plainBody = com.example.core.AmirLocalProxy.xorBytes(encBody, key)
+                // body = [cmd=1][port(2)][atyp=1][4 ipv4 bytes]
+                if ((plainBody[3].toInt() and 0xFF) == 1) {
+                    val ipBytes = plainBody.copyOfRange(4, 8)
+                    dialedDnsHost.set(java.net.InetAddress.getByAddress(ipBytes).hostAddress)
+                }
+
+                val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                    .copyOfRange(0, 16)
+                val encAck = com.example.core.AmirLocalProxy.xorBytes(expectedAck, key)
+                out.write(0x82)
+                out.write(encAck.size)
+                out.write(encAck)
+                out.flush()
+
+                val tcpDnsReq = com.example.core.AmirLocalProxy.xorBytes(readWsFrame(), key)
+                val dnsLen = ((tcpDnsReq[0].toInt() and 0xFF) shl 8) or (tcpDnsReq[1].toInt() and 0xFF)
+                val dnsReq = tcpDnsReq.copyOfRange(2, 2 + dnsLen)
+                // Build valid DNS response with RCODE=0 and matching TxID
+                val dnsResp = dnsReq.copyOf()
+                dnsResp[2] = 0x81.toByte() // QR=1, RD=1
+                dnsResp[3] = 0x80.toByte() // RA=1, RCODE=0
+                val tcpDnsResp = ByteArray(2 + dnsResp.size)
+                tcpDnsResp[0] = ((dnsResp.size ushr 8) and 0xFF).toByte()
+                tcpDnsResp[1] = (dnsResp.size and 0xFF).toByte()
+                System.arraycopy(dnsResp, 0, tcpDnsResp, 2, dnsResp.size)
+                val encResp = com.example.core.AmirLocalProxy.xorBytes(tcpDnsResp, key)
+                out.write(0x82)
+                out.write(encResp.size)
+                out.write(encResp)
+                out.write(byteArrayOf(0x88.toByte(), 0x00))
+                out.flush()
+            }
+        }
+        serverThread.isDaemon = true
+        serverThread.start()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "UdpDnsAmir",
+            protocol = ProtocolType.AMIR,
+            address = "127.0.0.1",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "ws://127.0.0.1:$wsPort/",
+            extraParam2 = ""
+        )
+        val proxy = com.example.core.AmirLocalProxy(cfg)
+        val localPort = proxy.start()
+        try {
+            java.net.Socket("127.0.0.1", localPort).use { ctrlSock ->
+                ctrlSock.soTimeout = 5000
+                val out = ctrlSock.getOutputStream()
+                val inp = java.io.DataInputStream(ctrlSock.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                inp.readFully(ByteArray(2))
+
+                // SOCKS5 UDP ASSOCIATE (0x03)
+                out.write(byteArrayOf(0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.readFully(rep)
+                assertEquals(0, rep[1].toInt())
+                val relayPort = ((rep[8].toInt() and 0xFF) shl 8) or (rep[9].toInt() and 0xFF)
+
+                // Craft standard DNS A query for example.com targeted at 1.1.1.1:53
+                fun buildDnsQuery(txHi: Byte, txLo: Byte): ByteArray {
+                    val label1 = "example".toByteArray(Charsets.US_ASCII)
+                    val label2 = "com".toByteArray(Charsets.US_ASCII)
+                    val dns = java.io.ByteArrayOutputStream()
+                    dns.write(byteArrayOf(txHi, txLo, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+                    dns.write(label1.size); dns.write(label1)
+                    dns.write(label2.size); dns.write(label2)
+                    dns.write(0x00)
+                    dns.write(byteArrayOf(0x00, 0x01, 0x00, 0x01)) // QTYPE=A, QCLASS=IN
+                    return dns.toByteArray()
+                }
+                val socksHeader = byteArrayOf(0x00, 0x00, 0x00, 0x01, 1, 1, 1, 1, 0x00, 0x35)
+
+                java.net.DatagramSocket().use { udp ->
+                    udp.soTimeout = 4000
+                    val q1 = socksHeader + buildDnsQuery(0x12, 0x34)
+                    udp.send(java.net.DatagramPacket(q1, q1.size, java.net.InetAddress.getByName("127.0.0.1"), relayPort))
+
+                    val buf1 = ByteArray(512)
+                    val pkt1 = java.net.DatagramPacket(buf1, buf1.size)
+                    udp.receive(pkt1)
+                    val resp1 = pkt1.data.copyOfRange(0, pkt1.length)
+                    // Original SOCKS header (1.1.1.1:53) must be preserved for TUN matching
+                    assertEquals(1, resp1[4].toInt() and 0xFF)
+                    assertEquals(1, resp1[5].toInt() and 0xFF)
+                    assertEquals(0x12, resp1[10].toInt() and 0xFF)
+                    assertEquals(0x34, resp1[11].toInt() and 0xFF)
+                    assertEquals(0x81, resp1[12].toInt() and 0xFF)
+
+                    // Worker target must have been transparently redirected to 8.8.8.8
+                    assertEquals("8.8.8.8", dialedDnsHost.get())
+
+                    // 2nd identical query with new TxID must hit DNS cache (upstreamCalls remains 1)
+                    val q2 = socksHeader + buildDnsQuery(0x56, 0x78)
+                    udp.send(java.net.DatagramPacket(q2, q2.size, java.net.InetAddress.getByName("127.0.0.1"), relayPort))
+                    val pkt2 = java.net.DatagramPacket(buf1, buf1.size)
+                    udp.receive(pkt2)
+                    val resp2 = pkt2.data.copyOfRange(0, pkt2.length)
+                    assertEquals(0x56, resp2[10].toInt() and 0xFF)
+                    assertEquals(0x78, resp2[11].toInt() and 0xFF)
+                    assertEquals(1, upstreamCalls.get())
+                }
             }
         } finally {
             proxy.stop()

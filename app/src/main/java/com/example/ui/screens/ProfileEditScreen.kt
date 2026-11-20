@@ -98,7 +98,7 @@ fun ProfileEditScreen(
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f)
+                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.74f)
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("edit_back_button")) {
