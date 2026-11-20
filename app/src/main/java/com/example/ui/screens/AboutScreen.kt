@@ -56,11 +56,14 @@ fun AboutScreen(
 
     Scaffold(
         containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             Column {
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.74f)
+                        containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                        titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onBackground
                     ),
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("about_back_button")) {
@@ -136,7 +139,8 @@ fun AboutScreen(
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.80f else 0.78f)
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    contentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 border = BorderStroke(0.85.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()

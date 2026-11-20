@@ -22,6 +22,16 @@ object XrayConfigBuilder {
         if (server.protocol == ProtocolType.CUSTOM && server.rawCustomJson.isNotBlank()) {
             return buildCustomConfigWithInjectedSettings(server.rawCustomJson, settings, resolvedServerHosts)
         }
+        if (server.protocol == ProtocolType.AMIR) {
+            return buildAmirFullConfig(
+                server = server,
+                settings = settings,
+                amirLocalPort = amirLocalPort,
+                resolvedServerHosts = resolvedServerHosts,
+                runtimeSocksPort = runtimeSocksPort,
+                runtimeHttpPort = runtimeHttpPort
+            )
+        }
 
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", settings.logLevel))
@@ -88,6 +98,330 @@ object XrayConfigBuilder {
         }
 
         return root.toString(2)
+    }
+
+    private fun buildAmirFullConfig(
+        server: ServerConfig,
+        settings: AppSettings,
+        amirLocalPort: Int,
+        resolvedServerHosts: Map<String, List<String>>,
+        runtimeSocksPort: Int?,
+        runtimeHttpPort: Int?
+    ): String {
+        val listenHost = if (settings.allowLan) "0.0.0.0" else "127.0.0.1"
+        val amirSniffing = JSONObject()
+            .put("destOverride", JSONArray().put("http").put("tls").put("quic").put("fakedns"))
+            .put("enabled", true)
+            .put("routeOnly", false)
+
+        val hasAuth = settings.localProxyUsername.isNotBlank() || settings.localProxyPassword.isNotBlank()
+        val accountsArr = if (hasAuth) {
+            JSONArray().put(
+                JSONObject()
+                    .put("user", settings.localProxyUsername)
+                    .put("pass", settings.localProxyPassword)
+            )
+        } else {
+            null
+        }
+
+        val inbounds = JSONArray()
+        val activeInboundTags = JSONArray()
+
+        if (settings.vpnMode) {
+            activeInboundTags.put("tun")
+            inbounds.put(
+                JSONObject()
+                    .put("tag", "tun")
+                    .put("port", 0)
+                    .put("protocol", "tun")
+                    .put(
+                        "settings",
+                        JSONObject()
+                            .put("name", "xray0")
+                            .put("MTU", settings.vpnMtu.coerceIn(1280, 9000))
+                            .put("userLevel", 8)
+                    )
+                    .put("sniffing", JSONObject(amirSniffing.toString()))
+            )
+        }
+
+        activeInboundTags.put("socks")
+        val socksSettings = JSONObject()
+            .put("auth", if (hasAuth) "password" else "noauth")
+            .put("udp", true)
+            .put("userLevel", 8)
+        if (accountsArr != null) {
+            socksSettings.put("accounts", accountsArr)
+        }
+        inbounds.put(
+            JSONObject()
+                .put("tag", "socks")
+                .put("listen", listenHost)
+                .put("port", runtimeSocksPort ?: settings.socksPort)
+                .put("protocol", "socks")
+                .put("settings", socksSettings)
+                .put("sniffing", JSONObject(amirSniffing.toString()))
+        )
+
+        if (settings.effectiveLocalProxyEnabled()) {
+            activeInboundTags.put("http")
+            val httpSettings = JSONObject().put("userLevel", 8)
+            if (accountsArr != null) {
+                httpSettings.put("accounts", accountsArr)
+            }
+            inbounds.put(
+                JSONObject()
+                    .put("tag", "http")
+                    .put("listen", listenHost)
+                    .put("port", runtimeHttpPort ?: settings.httpPort)
+                    .put("protocol", "http")
+                    .put("settings", httpSettings)
+                    .put("sniffing", JSONObject(amirSniffing.toString()))
+            )
+        }
+
+        val outbounds = JSONArray()
+            .put(buildProxyOutbound(server, settings, amirLocalPort))
+            .put(
+                JSONObject()
+                    .put("tag", "direct")
+                    .put("protocol", "freedom")
+                    .put(
+                        "streamSettings",
+                        JSONObject()
+                            .put("network", "tcp")
+                            .put(
+                                "sockopt",
+                                JSONObject()
+                                    .put("domainStrategy", "UseIP")
+                                    .put(
+                                        "happyEyeballs",
+                                        JSONObject()
+                                            .put("interleave", 2)
+                                            .put("maxConcurrentTry", 4)
+                                            .put("tryDelayMs", 250)
+                                    )
+                            )
+                    )
+            )
+            .put(
+                JSONObject()
+                    .put("tag", "block")
+                    .put("protocol", "blackhole")
+                    .put("settings", JSONObject())
+            )
+            .put(
+                JSONObject()
+                    .put("tag", "dns-out")
+                    .put("protocol", "dns")
+            )
+
+        val hostsObj = buildDnsHostsObject(
+            rawDnsHosts = settings.dnsHosts,
+            resolvedServerHosts = resolvedServerHosts,
+            includeDoHBootstrap = true
+        )
+        val dnsServers = JSONArray()
+            .put(
+                JSONObject()
+                    .put("address", "fakedns")
+                    .put(
+                        "domains",
+                        JSONArray()
+                            .put("geosite:cn")
+                            .put("geosite:google")
+                            .put("geosite:private")
+                            .put("domain:alidns.com")
+                            .put("domain:doh.pub")
+                            .put("domain:dot.pub")
+                            .put("domain:360.cn")
+                            .put("domain:onedns.net")
+                            .put("geosite:cn")
+                    )
+            )
+            .put("https://cloudflare-dns.com/dns-query")
+            .put(
+                JSONObject()
+                    .put("address", "223.5.5.5")
+                    .put("domains", JSONArray().put("geosite:cn"))
+                    .put("expectIPs", JSONArray().put("geoip:cn"))
+                    .put("skipFallback", true)
+                    .put("tag", "domestic-dns_cn_expect_0")
+            )
+            .put(
+                JSONObject()
+                    .put("address", "https://cloudflare-dns.com/dns-query")
+                    .put("domains", JSONArray().put("geosite:google"))
+            )
+            .put(
+                JSONObject()
+                    .put("address", "223.5.5.5")
+                    .put("domains", JSONArray().put("geosite:private"))
+                    .put("skipFallback", true)
+                    .put("tag", "domestic-dns_1_0")
+            )
+            .put(
+                JSONObject()
+                    .put("address", "223.5.5.5")
+                    .put(
+                        "domains",
+                        JSONArray()
+                            .put("domain:alidns.com")
+                            .put("domain:doh.pub")
+                            .put("domain:dot.pub")
+                            .put("domain:360.cn")
+                            .put("domain:onedns.net")
+                    )
+                    .put("skipFallback", true)
+                    .put("tag", "domestic-dns_2_0")
+            )
+            .put(
+                JSONObject()
+                    .put("address", "223.5.5.5")
+                    .put("domains", JSONArray().put("geosite:cn"))
+                    .put("skipFallback", true)
+                    .put("tag", "domestic-dns_3_0")
+            )
+
+        val dnsObj = JSONObject()
+            .put("hosts", hostsObj)
+            .put("servers", dnsServers)
+            .put("tag", "dns-module")
+
+        val fakeDnsArr = JSONArray().put(
+            JSONObject()
+                .put("ipPool", "198.18.0.0/15")
+                .put("poolSize", 10000)
+        )
+        if (settings.enableIpv6 || settings.preferIpv6) {
+            fakeDnsArr.put(
+                JSONObject()
+                    .put("ipPool", "fc00::/18")
+                    .put("poolSize", 10000)
+            )
+        }
+
+        val cnDnsIps = JSONArray()
+            .put("223.5.5.5").put("223.6.6.6").put("2400:3200::1").put("2400:3200:baba::1")
+            .put("119.29.29.29").put("1.12.12.12").put("120.53.53.53").put("2402:4e00::").put("2402:4e00:1::")
+            .put("180.76.76.76").put("2400:da00::6666")
+            .put("114.114.114.114").put("114.114.115.115")
+            .put("180.184.1.1").put("180.184.2.2")
+            .put("101.226.4.6").put("218.30.118.6").put("123.125.81.6").put("140.207.198.6")
+            .put("1.2.4.8").put("210.2.4.8")
+            .put("202.98.0.68").put("218.2.2.2").put("221.131.143.69")
+            .put("112.124.47.27").put("114.215.126.16").put("47.101.136.37")
+            .put("120.77.213.28").put("180.101.147.209")
+
+        val rules = JSONArray()
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("inboundTag", activeInboundTags)
+                    .put("port", "53")
+                    .put("outboundTag", "dns-out")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("network", "udp")
+                    .put("port", "443")
+                    .put("outboundTag", "block")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", JSONArray().put("geosite:google"))
+                    .put("outboundTag", "proxy")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("ip", JSONArray().put("ext:geoip-only-cn-private.dat:private"))
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", JSONArray().put("geosite:private"))
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("ip", cnDnsIps)
+                    .put("port", "53")
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put(
+                        "domain",
+                        JSONArray()
+                            .put("domain:alidns.com")
+                            .put("domain:doh.pub")
+                            .put("domain:dot.pub")
+                            .put("domain:360.cn")
+                            .put("domain:onedns.net")
+                    )
+                    .put("port", "53")
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("ip", JSONArray().put("ext:geoip-only-cn-private.dat:cn"))
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", JSONArray().put("geosite:cn"))
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put(
+                        "inboundTag",
+                        JSONArray()
+                            .put("domestic-dns_cn_expect_0")
+                            .put("domestic-dns_1_0")
+                            .put("domestic-dns_2_0")
+                            .put("domestic-dns_3_0")
+                    )
+                    .put("outboundTag", "direct")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("inboundTag", JSONArray().put("dns-module"))
+                    .put("outboundTag", "proxy")
+            )
+            .put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("port", "0-65535")
+                    .put("outboundTag", "proxy")
+            )
+
+        return JSONObject()
+            .put("dns", dnsObj)
+            .put("fakedns", fakeDnsArr)
+            .put("inbounds", inbounds)
+            .put("log", JSONObject().put("loglevel", settings.logLevel.ifBlank { "warning" }))
+            .put("outbounds", outbounds)
+            .put("policy", buildPolicy())
+            .put(
+                "routing",
+                JSONObject()
+                    .put("domainStrategy", "AsIs")
+                    .put("rules", rules)
+            )
+            .put("stats", JSONObject())
+            .toString(2)
     }
 
     fun buildOutboundDelayTestJson(

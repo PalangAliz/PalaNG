@@ -32,17 +32,17 @@ val EmeraldContainerDark = Color(0xFF064E3B)
 val EmeraldContainerLight = Color(0xFFD1FAE5)
 
 // Dark theme Matte Obsidian surfaces
-val Obsidian950 = Color(0xFF0D1017)
-val Obsidian900 = Color(0xFF121721)
-val Obsidian850 = Color(0xFF171D29)
-val Obsidian800 = Color(0xFF1E2533)
-val Obsidian700 = Color(0xFF2A3346)
+val Obsidian950 = Color(0xFF0B0E14)
+val Obsidian900 = Color(0xFF111620)
+val Obsidian850 = Color(0xFF171E2B)
+val Obsidian800 = Color(0xFF1E2636)
+val Obsidian700 = Color(0xFF2B3548)
 
 // Light theme Pure White + crisp neutral card surfaces
 val SurfaceWhite = Color(0xFFFFFFFF)
-val SurfaceNeutralLow = Color(0xFFFFFFFF)
-val SurfaceNeutralCard = Color(0xFFFDFEFF)
-val SurfaceNeutralHigh = Color(0xFFF3F5F9)
+val SurfaceNeutralLow = Color(0xFFFCFDFF)
+val SurfaceNeutralCard = Color(0xFFFAFBFD)
+val SurfaceNeutralHigh = Color(0xFFF1F4F9)
 
 val AmberLatency = Color(0xFFF59E0B)
 val CoralError = Color(0xFFEF4444)

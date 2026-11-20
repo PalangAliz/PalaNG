@@ -85,6 +85,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -426,6 +427,7 @@ fun HomeScreen(
     ) {
         Scaffold(
             containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = {
                 SnackbarHost(
@@ -437,7 +439,10 @@ fun HomeScreen(
                 Column {
                     TopAppBar(
                         colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.72f)
+                            containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                            titleContentColor = MaterialTheme.colorScheme.onBackground,
+                            navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                            actionIconContentColor = MaterialTheme.colorScheme.onBackground
                         ),
                         navigationIcon = {
                             IconButton(
@@ -695,6 +700,10 @@ fun HomeScreen(
                         placeholder = { Text(stringResource(R.string.search_hint)) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        ),
                         leadingIcon = { Icon(Icons.Outlined.Search, null) },
                         trailingIcon = {
                             if (uiState.searchQuery.isNotEmpty()) {
@@ -900,7 +909,8 @@ private fun HeroConnectionCard(
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.80f else 0.78f)
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.94f else 0.94f),
+            contentColor = MaterialTheme.colorScheme.onSurface
         ),
         border = BorderStroke(if (isConnected || isBusy) 1.25.dp else 0.85.dp, cardBorderColor),
         modifier = modifier
@@ -1098,12 +1108,12 @@ private fun MinimalGroupPill(
     val containerColor = when {
         selected && isDark -> PumpkinYellow
         selected -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.72f)
+        else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
     }
     val contentColor = when {
         selected && isDark -> Color(0xFF1A1200)
         selected -> MaterialTheme.colorScheme.onPrimary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.onSurface
     }
     Surface(
         onClick = onClick,
@@ -1150,23 +1160,26 @@ private fun MinimalServerRowCard(
     )
     val cardContainer = MaterialTheme.colorScheme.surface.copy(
         alpha = when {
-            isConnected || isSelected -> if (isDark) 0.84f else 0.84f
-            else -> if (isDark) 0.76f else 0.76f
+            isConnected || isSelected -> 0.96f
+            else -> 0.93f
         }
     )
     val cardBorder = BorderStroke(
-        width = if (isSelected || isConnected) 1.2.dp else 0.8.dp,
+        width = if (isSelected || isConnected) 1.2.dp else 0.85.dp,
         color = when {
             isConnected -> EmeraldConnected.copy(alpha = 0.65f)
             isSelected -> activeAccent.copy(alpha = 0.65f)
-            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
+            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f)
         }
     )
     var showMenu by remember { mutableStateOf(false) }
 
     Card(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = cardContainer),
+        colors = CardDefaults.cardColors(
+            containerColor = cardContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        ),
         border = cardBorder,
         modifier = Modifier
             .fillMaxWidth()
@@ -1366,21 +1379,24 @@ private fun MinimalServerGridCard(
         label = "gridIndicatorColor"
     )
     val cardContainer = MaterialTheme.colorScheme.surface.copy(
-        alpha = if (isSelected || isConnected) 0.84f else 0.76f
+        alpha = if (isSelected || isConnected) 0.96f else 0.93f
     )
     val cardBorder = BorderStroke(
-        width = if (isSelected || isConnected) 1.2.dp else 0.8.dp,
+        width = if (isSelected || isConnected) 1.2.dp else 0.85.dp,
         color = when {
             isConnected -> EmeraldConnected.copy(alpha = 0.65f)
             isSelected -> activeAccent.copy(alpha = 0.65f)
-            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
+            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f)
         }
     )
     var showCardMenu by remember { mutableStateOf(false) }
 
     Card(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = cardContainer),
+        colors = CardDefaults.cardColors(
+            containerColor = cardContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        ),
         border = cardBorder,
         modifier = Modifier
             .fillMaxWidth()

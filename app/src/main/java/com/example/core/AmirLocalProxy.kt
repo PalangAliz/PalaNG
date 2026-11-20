@@ -105,10 +105,22 @@ class AmirLocalProxy(
     private val cleanIp: String = serverConfig.extraParam2.trim().removePrefix("[").removeSuffix("]")
     private val uuidBytes: ByteArray = serverConfig.passwordOrId.trim().toByteArray(StandardCharsets.UTF_8)
 
-    private val enableWarmPool: Boolean = !isLoopbackHost(workerHost)
+    private val enableWarmPool: Boolean = !isLoopbackTarget(workerHost, parsedDnsHosts, resolvedHosts)
 
-    fun start(): Int {
-        val ss = ServerSocket(0, 1024, InetAddress.getByName("127.0.0.1"))
+    fun start(preferredPort: Int = 0): Int {
+        val loopback = InetAddress.getByName("127.0.0.1")
+        val ss = if (preferredPort in 1024..65535) {
+            runCatching {
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(loopback, preferredPort), 1024)
+                }
+            }.getOrElse {
+                ServerSocket(0, 1024, loopback)
+            }
+        } else {
+            ServerSocket(0, 1024, loopback)
+        }
         serverSocket = ss
         running.set(true)
         val boundPort = ss.localPort
@@ -296,28 +308,51 @@ class AmirLocalProxy(
                 return
             }
 
-            // 4. Send Amir init packet (retry once with fresh dial if pooled WS had gone stale)
+            // 4. Send Amir init packet (retry once with fresh dial if pooled WS had gone stale or returned null)
             val (initPacket, key) = buildInitPacket(uuidBytes, dialHost, targetPort)
             var ackBytes: ByteArray? = null
             var activeKey = key
+            var handshakeFailed = false
             try {
                 wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
                 wsConn.out.flush()
                 ackBytes = wsConn.readMessageBytes()
+                if (ackBytes == null || ackBytes.size < 16) {
+                    handshakeFailed = true
+                }
             } catch (_: Exception) {
+                handshakeFailed = true
+            }
+            if (handshakeFailed) {
                 activeSockets.remove(wsConn.socket)
                 runCatching { wsConn.socket.close() }
                 wsConn = dialBestWebSocket()
                 if (wsConn != null) {
                     val (retryInit, retryKey) = buildInitPacket(uuidBytes, dialHost, targetPort)
                     activeKey = retryKey
-                    wsConn.sendBinaryFrame(retryInit, 0, retryInit.size)
-                    wsConn.out.flush()
-                    ackBytes = wsConn.readMessageBytes()
+                    ackBytes = runCatching {
+                        wsConn.sendBinaryFrame(retryInit, 0, retryInit.size)
+                        wsConn.out.flush()
+                        wsConn.readMessageBytes()
+                    }.getOrNull()
+                } else {
+                    ackBytes = null
                 }
             }
 
             if (wsConn == null || ackBytes == null || ackBytes.size < 16) {
+                // Cloudflare Workers connect() forbids connecting to Cloudflare edge/DoH IPs (e.g. 104.16.248.249).
+                // Fall back to a protect()-bypassed direct TLS/TCP relay for port-443 Cloudflare DoH endpoints.
+                if (targetPort == 443 && isCloudflareDohIp(targetHost)) {
+                    wsConn?.let { conn ->
+                        activeSockets.remove(conn.socket)
+                        runCatching { conn.socket.close() }
+                        wsConn = null
+                    }
+                    if (tryDirectProtectedTcpRelay(targetHost, targetPort, localSocket, localIn, localOut)) {
+                        return
+                    }
+                }
                 emitThrottledError("Amir tunnel handshake failed for $dialHost:$targetPort")
                 runCatching {
                     localOut.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
@@ -497,14 +532,33 @@ class AmirLocalProxy(
         var wsConn: DirectWsConnection? = null
         try {
             wsConn = obtainWebSocket() ?: return null
-            val (initPacket, key) = buildInitPacket(uuidBytes, dnsHost, dnsPort)
-            wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
-            wsConn.out.flush()
-
-            val ack = wsConn.readMessageBytes() ?: return null
-            if (ack.size < 16) return null
-            val decAck = xorBytes(ack, key)
-            val expAck = hmacSha256(key, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
+            val (initPacket, initKey) = buildInitPacket(uuidBytes, dnsHost, dnsPort)
+            var activeKey = initKey
+            var ack: ByteArray? = null
+            var handshakeFailed = false
+            try {
+                wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
+                wsConn.out.flush()
+                ack = wsConn.readMessageBytes()
+                if (ack == null || ack.size < 16) {
+                    handshakeFailed = true
+                }
+            } catch (_: Exception) {
+                handshakeFailed = true
+            }
+            if (handshakeFailed) {
+                activeSockets.remove(wsConn.socket)
+                runCatching { wsConn.socket.close() }
+                wsConn = dialBestWebSocket() ?: return null
+                val (retryInit, retryKey) = buildInitPacket(uuidBytes, dnsHost, dnsPort)
+                activeKey = retryKey
+                wsConn.sendBinaryFrame(retryInit, 0, retryInit.size)
+                wsConn.out.flush()
+                ack = wsConn.readMessageBytes()
+            }
+            if (ack == null || ack.size < 16) return null
+            val decAck = xorBytes(ack, activeKey)
+            val expAck = hmacSha256(activeKey, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
             if (!MessageDigest.isEqual(decAck.copyOfRange(0, 16), expAck)) return null
 
             // DNS-over-TCP (RFC 1035 Section 4.2.2): 2-byte big-endian length prefix + message
@@ -513,7 +567,7 @@ class AmirLocalProxy(
             tcpDnsReq[1] = (dnsQuery.size and 0xFF).toByte()
             System.arraycopy(dnsQuery, 0, tcpDnsReq, 2, dnsQuery.size)
 
-            val encReq = xorBytes(tcpDnsReq, key)
+            val encReq = xorBytes(tcpDnsReq, activeKey)
             wsConn.sendBinaryFrame(encReq, 0, encReq.size)
             wsConn.out.flush()
 
@@ -521,7 +575,7 @@ class AmirLocalProxy(
             val accumulated = java.io.ByteArrayOutputStream(512)
             while (accumulated.size() < 2) {
                 val frame = wsConn.readMessageBytes() ?: break
-                val dec = xorBytesWithOffset(frame, key, keyOffset)
+                val dec = xorBytesWithOffset(frame, activeKey, keyOffset)
                 keyOffset = (keyOffset + frame.size) and 15
                 accumulated.write(dec)
             }
@@ -532,7 +586,7 @@ class AmirLocalProxy(
 
             while (accumulated.size() < 2 + expectedLen) {
                 val frame = wsConn.readMessageBytes() ?: break
-                val dec = xorBytesWithOffset(frame, key, keyOffset)
+                val dec = xorBytesWithOffset(frame, activeKey, keyOffset)
                 keyOffset = (keyOffset + frame.size) and 15
                 accumulated.write(dec)
             }
@@ -742,7 +796,81 @@ class AmirLocalProxy(
         }
     }
 
+    private fun tryDirectProtectedTcpRelay(
+        targetHost: String,
+        targetPort: Int,
+        localSocket: Socket,
+        localIn: InputStream,
+        localOut: OutputStream
+    ): Boolean {
+        val candidates = buildList {
+            if (cleanIp.isNotBlank()) add(cleanIp)
+            add(targetHost)
+        }.distinct()
+
+        var remoteSocket: Socket? = null
+        for (candidate in candidates) {
+            val sock = Socket()
+            activeSockets.add(sock)
+            val connected = runCatching {
+                sock.tcpNoDelay = true
+                sock.keepAlive = true
+                val addr = resolveConnectAddress(candidate)
+                protectSocket(sock)
+                sock.connect(InetSocketAddress(addr, targetPort), CLEAN_IP_CONNECT_TIMEOUT_MS)
+                true
+            }.getOrDefault(false)
+            if (connected) {
+                remoteSocket = sock
+                break
+            } else {
+                activeSockets.remove(sock)
+                runCatching { sock.close() }
+            }
+        }
+        val remote = remoteSocket ?: return false
+
+        try {
+            localSocket.soTimeout = 0
+            remote.soTimeout = 0
+            localOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+            localOut.flush()
+
+            val remoteIn = remote.getInputStream()
+            val remoteOut = remote.getOutputStream()
+            val upFuture = proxyExecutor.submit {
+                val buf = ByteArray(16384)
+                runCatching {
+                    while (running.get() && !remote.isClosed && !localSocket.isClosed) {
+                        val n = localIn.read(buf)
+                        if (n <= 0) break
+                        remoteOut.write(buf, 0, n)
+                        if (localIn.available() == 0) remoteOut.flush()
+                    }
+                    runCatching { remote.shutdownOutput() }
+                }
+            }
+            val downBuf = ByteArray(16384)
+            runCatching {
+                while (running.get() && !remote.isClosed && !localSocket.isClosed) {
+                    val n = remoteIn.read(downBuf)
+                    if (n <= 0) break
+                    localOut.write(downBuf, 0, n)
+                    if (remoteIn.available() == 0) localOut.flush()
+                }
+                runCatching { localOut.flush() }
+            }
+            runCatching { upFuture.cancel(false) }
+            return true
+        } finally {
+            activeSockets.remove(remote)
+            runCatching { remote.close() }
+        }
+    }
+
     private fun dialBestWebSocket(): DirectWsConnection? {
+        var cleanFailed = false
+        var cleanErrorMsg: String? = null
         if (cleanIp.isNotBlank() && System.currentTimeMillis() >= cleanIpCooldownUntilMs.get()) {
             val cleanResult = runCatching { dialDirectWebSocket(cleanIp, CLEAN_IP_CONNECT_TIMEOUT_MS) }
             val conn = cleanResult.getOrNull()
@@ -750,18 +878,23 @@ class AmirLocalProxy(
                 cleanIpFailureCount.set(0)
                 return conn
             }
-            if (cleanIpFailureCount.incrementAndGet() >= 2) {
-                cleanIpCooldownUntilMs.set(System.currentTimeMillis() + CLEAN_IP_COOLDOWN_MS)
-            }
-            if (loggedCleanIpFallback.compareAndSet(false, true)) {
-                emitInfo("Amir CF Clean IP ($cleanIp) dial failed (${cleanResult.exceptionOrNull()?.message}), falling back to direct host")
-            }
+            cleanFailed = true
+            cleanErrorMsg = cleanResult.exceptionOrNull()?.message
         }
-        return runCatching { dialDirectWebSocket(workerHost, DIRECT_CONNECT_TIMEOUT_MS) }
+        val directConn = runCatching { dialDirectWebSocket(workerHost, DIRECT_CONNECT_TIMEOUT_MS) }
             .onFailure { err ->
                 emitThrottledError("Amir WebSocket dial failed: ${err.message}")
             }
             .getOrNull()
+        if (directConn != null && cleanFailed) {
+            if (cleanIpFailureCount.incrementAndGet() >= 2) {
+                cleanIpCooldownUntilMs.set(System.currentTimeMillis() + CLEAN_IP_COOLDOWN_MS)
+            }
+            if (loggedCleanIpFallback.compareAndSet(false, true)) {
+                emitInfo("Amir CF Clean IP ($cleanIp) dial failed ($cleanErrorMsg), falling back to direct host")
+            }
+        }
+        return directConn
     }
 
     private fun emitInfo(msg: String) {
@@ -792,7 +925,11 @@ class AmirLocalProxy(
             mapped.firstNotNullOfOrNull { ip -> runCatching { InetAddress.getByName(ip) }.getOrNull() }
                 ?.let { return it }
         }
-        return InetAddress.getByName(cleanTarget)
+        val all = InetAddress.getAllByName(cleanTarget)
+        if (!settings.preferIpv6) {
+            all.firstOrNull { it is Inet4Address }?.let { return it }
+        }
+        return all.firstOrNull() ?: InetAddress.getByName(cleanTarget)
     }
 
     private fun dialDirectWebSocket(connectTarget: String, connectTimeoutMs: Int): DirectWsConnection {
@@ -842,6 +979,7 @@ class AmirLocalProxy(
             val upgradeReq = buildString {
                 append("GET ").append(requestTarget).append(" HTTP/1.1\r\n")
                 append("Host: ").append(httpHostHeader).append("\r\n")
+                append("User-Agent: Mozilla/5.0\r\n")
                 append("Upgrade: websocket\r\n")
                 append("Connection: Upgrade\r\n")
                 append("Sec-WebSocket-Key: ").append(wsKey).append("\r\n")
@@ -1044,16 +1182,17 @@ class AmirLocalProxy(
         const val DEFAULT_UUID = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
         const val DEFAULT_WORKER_URL = "wss://twilight-dream-9e3c.aliahmadiphotoofficial.workers.dev/"
         const val DEFAULT_CLEAN_IP = "172.67.70.244"
+        const val DEFAULT_SOCKS_PORT = 40446
         const val SUBPROTO = "chat.v2"
         const val MAX_CHUNK = 16384
         private const val WS_MAX_HEADER_BYTES = 14
         private const val IO_BUFFER_SIZE = 65536
-        private const val INITIAL_WARM_POOL_SIZE = 3
+        private const val INITIAL_WARM_POOL_SIZE = 2
         private const val MAX_WARM_POOL_SIZE = 4
         private const val WARM_POOL_MAX_AGE_MS = 18_000L
         private const val DNS_CACHE_TTL_MS = 120_000L
-        private const val HANDSHAKE_TIMEOUT_MS = 8_000
-        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 3_000
+        private const val HANDSHAKE_TIMEOUT_MS = 10_000
+        private const val CLEAN_IP_CONNECT_TIMEOUT_MS = 4_000
         private const val DIRECT_CONNECT_TIMEOUT_MS = 5_000
         private const val CLEAN_IP_COOLDOWN_MS = 30_000L
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -1071,13 +1210,43 @@ class AmirLocalProxy(
         }
 
         private fun isLoopbackHost(host: String): Boolean {
-            return host == "127.0.0.1" || host.equals("localhost", ignoreCase = true) || host == "::1"
+            val clean = host.trim().lowercase().removePrefix("[").removeSuffix("]")
+            return clean == "127.0.0.1" || clean.startsWith("127.") || clean == "localhost" || clean == "::1"
+        }
+
+        private fun isLoopbackTarget(
+            workerHost: String,
+            parsedDnsHosts: Map<String, List<String>>,
+            resolvedHosts: Map<String, List<String>>
+        ): Boolean {
+            if (isLoopbackHost(workerHost)) return true
+            val mapped = parsedDnsHosts[workerHost]
+                ?: parsedDnsHosts["domain:$workerHost"]
+                ?: parsedDnsHosts["full:$workerHost"]
+                ?: resolvedHosts[workerHost]
+            return mapped?.any { isLoopbackHost(it) } == true
         }
 
         private fun isCloudflareResolverIp(host: String): Boolean {
             return host == "1.1.1.1" || host == "1.0.0.1" ||
                 host.equals("2606:4700:4700::1111", ignoreCase = true) ||
                 host.equals("2606:4700:4700::1001", ignoreCase = true)
+        }
+
+        private fun isCloudflareDohIp(host: String): Boolean {
+            val clean = host.trim().removePrefix("[").removeSuffix("]")
+            return clean == "104.16.248.249" ||
+                clean == "104.16.249.249" ||
+                clean == "162.159.61.8" ||
+                clean == "172.64.41.8" ||
+                clean == "1.1.1.1" ||
+                clean == "1.0.0.1" ||
+                clean.equals("2606:4700::6810:f8f9", ignoreCase = true) ||
+                clean.equals("2606:4700::6810:f9f9", ignoreCase = true) ||
+                clean.equals("2a06:98c1:52::8", ignoreCase = true) ||
+                clean.equals("2803:f800:53::8", ignoreCase = true) ||
+                clean.equals("2606:4700:4700::1111", ignoreCase = true) ||
+                clean.equals("2606:4700:4700::1001", ignoreCase = true)
         }
 
         private fun extractDnsQuestionCacheKey(dns: ByteArray): String? {

@@ -108,10 +108,14 @@ fun PerAppProxyScreen(
 
     Scaffold(
         containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onBackground,
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.74f)
+                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("per_app_back_button")) {
@@ -168,106 +172,114 @@ fun PerAppProxyScreen(
                     }
                 }
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxSize()
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Enable Per-App Proxy", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        text = if (settings.perAppBypassMode) "Bypass selected apps (direct)" else "Proxy only selected apps",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = settings.perAppProxyEnabled,
-                    onCheckedChange = { enabled ->
-                        viewModel.updateSettings { it.copy(perAppProxyEnabled = enabled) }
-                    }
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = settings.perAppBypassMode,
-                    onClick = { viewModel.updateSettings { it.copy(perAppBypassMode = true) } },
-                    label = { Text("Bypass Mode") }
-                )
-                FilterChip(
-                    selected = !settings.perAppBypassMode,
-                    onClick = { viewModel.updateSettings { it.copy(perAppBypassMode = false) } },
-                    label = { Text("Proxy-Only Mode") }
-                )
-                FilterChip(
-                    selected = showSystem,
-                    onClick = { showSystem = !showSystem },
-                    label = { Text("System") }
-                )
-            }
-
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = { Text("Search apps (${settings.perAppPackages.size} selected)") },
-                leadingIcon = { Icon(Icons.Outlined.Search, null) },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            HorizontalDivider()
-
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(filtered, key = { it.packageName }) { appItem ->
-                    val checked = settings.perAppPackages.contains(appItem.packageName)
+                Column(modifier = Modifier.fillMaxSize()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                viewModel.updateSettings { cur ->
-                                    val next = cur.perAppPackages.toMutableSet()
-                                    if (checked) next.remove(appItem.packageName) else next.add(appItem.packageName)
-                                    cur.copy(perAppPackages = next)
-                                }
-                            }
                             .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
+                            Text("Enable Per-App Proxy", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                text = appItem.appName,
-                                style = MaterialTheme.typography.bodyLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = appItem.packageName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = if (settings.perAppBypassMode) "Bypass selected apps (direct)" else "Proxy only selected apps",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Checkbox(
-                            checked = checked,
-                            onCheckedChange = { isChecked ->
-                                viewModel.updateSettings { cur ->
-                                    val next = cur.perAppPackages.toMutableSet()
-                                    if (isChecked) next.add(appItem.packageName) else next.remove(appItem.packageName)
-                                    cur.copy(perAppPackages = next)
-                                }
+                        Switch(
+                            checked = settings.perAppProxyEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateSettings { it.copy(perAppProxyEnabled = enabled) }
                             }
                         )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = settings.perAppBypassMode,
+                            onClick = { viewModel.updateSettings { it.copy(perAppBypassMode = true) } },
+                            label = { Text("Bypass Mode") }
+                        )
+                        FilterChip(
+                            selected = !settings.perAppBypassMode,
+                            onClick = { viewModel.updateSettings { it.copy(perAppBypassMode = false) } },
+                            label = { Text("Proxy-Only Mode") }
+                        )
+                        FilterChip(
+                            selected = showSystem,
+                            onClick = { showSystem = !showSystem },
+                            label = { Text("System") }
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        placeholder = { Text("Search apps (${settings.perAppPackages.size} selected)") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+
+                    HorizontalDivider()
+
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(filtered, key = { it.packageName }) { appItem ->
+                            val checked = settings.perAppPackages.contains(appItem.packageName)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.updateSettings { cur ->
+                                            val next = cur.perAppPackages.toMutableSet()
+                                            if (checked) next.remove(appItem.packageName) else next.add(appItem.packageName)
+                                            cur.copy(perAppPackages = next)
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = appItem.appName,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = appItem.packageName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { isChecked ->
+                                        viewModel.updateSettings { cur ->
+                                            val next = cur.perAppPackages.toMutableSet()
+                                            if (isChecked) next.add(appItem.packageName) else next.remove(appItem.packageName)
+                                            cur.copy(perAppPackages = next)
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
