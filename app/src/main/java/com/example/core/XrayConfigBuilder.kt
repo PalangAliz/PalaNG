@@ -283,9 +283,11 @@ object XrayConfigBuilder {
                     .put("skipFallback", true)
                     .put("tag", "domestic-dns_3_0")
             )
+            .put("https://dns.google/dns-query")
 
         val dnsObj = JSONObject()
             .put("hosts", hostsObj)
+            .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
             .put("servers", dnsServers)
             .put("tag", "dns-module")
 

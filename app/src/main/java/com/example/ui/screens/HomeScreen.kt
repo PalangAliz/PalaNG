@@ -1511,12 +1511,56 @@ private fun ConnectionInfoDialog(
                     }
                 }
                 is ConnectionInfoState.Success -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "${state.elapsedMs} ms • ${state.url}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (state.countryFlag.isNotEmpty() || state.countryLabel.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("connection_info_country_banner")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    if (state.countryFlag.isNotEmpty()) {
+                                        Text(
+                                            text = state.countryFlag,
+                                            style = MaterialTheme.typography.headlineSmall
+                                        )
+                                    }
+                                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                        Text(
+                                            text = state.countryLabel.ifBlank { state.countryFlag },
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "${state.elapsedMs} ms",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = EmeraldConnected,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = "${state.elapsedMs} ms • ${state.url}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (state.countryFlag.isNotEmpty() || state.countryLabel.isNotEmpty()) {
+                            Text(
+                                text = state.url,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         if (state.summaryLines.isNotEmpty()) {
                             state.summaryLines.forEach { (label, value) ->
                                 Row(

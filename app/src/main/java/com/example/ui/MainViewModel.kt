@@ -51,7 +51,9 @@ sealed interface ConnectionInfoState {
         val url: String,
         val elapsedMs: Long,
         val summaryLines: List<Pair<String, String>>,
-        val rawBody: String
+        val rawBody: String,
+        val countryFlag: String = "",
+        val countryLabel: String = ""
     ) : ConnectionInfoState
     data class Error(val message: String) : ConnectionInfoState
 }
@@ -299,12 +301,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         error("HTTP ${resp.code}: ${resp.message}")
                     }
                     val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
-                    val summary = parseConnectionInfoBody(body)
+                    val parsed = parseConnectionInfo(body)
                     _connectionInfoState.value = ConnectionInfoState.Success(
                         url = url,
                         elapsedMs = elapsed,
-                        summaryLines = summary,
-                        rawBody = body
+                        summaryLines = parsed.summaryLines,
+                        rawBody = body,
+                        countryFlag = parsed.countryFlag,
+                        countryLabel = parsed.countryLabel
                     )
                 }
             }.onFailure { err ->
@@ -315,29 +319,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun parseConnectionInfoBody(body: String): List<Pair<String, String>> {
-        val obj = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
-        val pairs = mutableListOf<Pair<String, String>>()
-        val candidateKeys = listOf(
-            "ip" to "IP",
-            "country" to "Country",
-            "country_code" to "Code",
-            "region" to "Region",
-            "city" to "City",
-            "isp" to "ISP",
-            "organization" to "Organization",
-            "org" to "Org",
-            "asn" to "ASN",
-            "asn_organization" to "ASN Org",
-            "timezone" to "Timezone"
-        )
-        candidateKeys.forEach { (key, label) ->
-            val v = obj.optString(key, "").trim()
-            if (v.isNotEmpty() && v != "null") {
-                pairs += label to v
-            }
+    internal data class ParsedConnectionInfo(
+        val summaryLines: List<Pair<String, String>>,
+        val countryFlag: String,
+        val countryLabel: String
+    )
+
+    companion object {
+        fun countryCodeToFlagEmoji(countryCode: String): String {
+            val clean = countryCode.trim().uppercase()
+            if (clean.length != 2) return ""
+            val c0 = clean[0]
+            val c1 = clean[1]
+            if (c0 !in 'A'..'Z' || c1 !in 'A'..'Z') return ""
+            val first = 0x1F1E6 + (c0.code - 'A'.code)
+            val second = 0x1F1E6 + (c1.code - 'A'.code)
+            return String(Character.toChars(first)) + String(Character.toChars(second))
         }
-        return pairs
+
+        internal fun parseConnectionInfo(body: String): ParsedConnectionInfo {
+            val obj = runCatching { JSONObject(body) }.getOrNull()
+                ?: return ParsedConnectionInfo(emptyList(), "", "")
+            val pairs = mutableListOf<Pair<String, String>>()
+
+            val ipVal = obj.optString("ip", "").trim().takeIf { it.isNotEmpty() && it != "null" }
+                ?: obj.optString("query", "").trim().takeIf { it.isNotEmpty() && it != "null" }
+            if (ipVal != null) {
+                pairs += "IP" to ipVal
+            }
+
+            val rawCountry = obj.optString("country", "").trim().takeIf { it.isNotEmpty() && it != "null" }.orEmpty()
+            val rawCode = (
+                obj.optString("country_code", "").trim().takeIf { it.isNotEmpty() && it != "null" }
+                    ?: obj.optString("countryCode", "").trim().takeIf { it.isNotEmpty() && it != "null" }
+                    ?: rawCountry.takeIf { it.length == 2 && it[0].isLetter() && it[1].isLetter() }
+                ).orEmpty().uppercase()
+            val flag = countryCodeToFlagEmoji(rawCode)
+            val countryText = when {
+                rawCountry.isNotEmpty() && flag.isNotEmpty() -> "$flag $rawCountry"
+                rawCountry.isNotEmpty() -> rawCountry
+                rawCode.isNotEmpty() && flag.isNotEmpty() -> "$flag $rawCode"
+                rawCode.isNotEmpty() -> rawCode
+                else -> ""
+            }
+            val countryLabelOnly = rawCountry.ifEmpty { rawCode }
+
+            if (countryText.isNotEmpty()) {
+                pairs += "Country" to countryText
+            }
+            if (rawCode.isNotEmpty()) {
+                pairs += "Code" to rawCode
+            }
+
+            val remainingKeys = listOf(
+                "region" to "Region",
+                "city" to "City",
+                "isp" to "ISP",
+                "organization" to "Organization",
+                "org" to "Org",
+                "asn" to "ASN",
+                "asn_organization" to "ASN Org",
+                "timezone" to "Timezone"
+            )
+            remainingKeys.forEach { (key, label) ->
+                val v = obj.optString(key, "").trim()
+                if (v.isNotEmpty() && v != "null") {
+                    pairs += label to v
+                }
+            }
+            return ParsedConnectionInfo(
+                summaryLines = pairs,
+                countryFlag = flag,
+                countryLabel = countryLabelOnly
+            )
+        }
     }
 
     fun importFromClipboard() {

@@ -1006,6 +1006,7 @@ class ConfigParserTest {
 
         val dnsObj = amirRoot.getJSONObject("dns")
         assertEquals("dns-module", dnsObj.getString("tag"))
+        assertEquals("UseIPv4", dnsObj.getString("queryStrategy"))
         assertEquals("104.16.248.249", dnsObj.getJSONObject("hosts").getJSONArray("cloudflare-dns.com").getString(0))
         val serversArr = dnsObj.getJSONArray("servers")
         assertEquals("fakedns", serversArr.getJSONObject(0).getString("address"))
@@ -1018,6 +1019,7 @@ class ConfigParserTest {
         assertEquals("domestic-dns_1_0", serversArr.getJSONObject(4).getString("tag"))
         assertEquals("domestic-dns_2_0", serversArr.getJSONObject(5).getString("tag"))
         assertEquals("domestic-dns_3_0", serversArr.getJSONObject(6).getString("tag"))
+        assertEquals("https://dns.google/dns-query", serversArr.getString(7))
 
         val routingObj = amirRoot.getJSONObject("routing")
         assertEquals("AsIs", routingObj.getString("domainStrategy"))
@@ -1501,5 +1503,180 @@ class ConfigParserTest {
             proxy.stop()
             wsServer.close()
         }
+    }
+
+    @Test
+    fun `AmirLocalProxy bypasses Worker WS on Cloudflare DoH port 443 and does not leak WS when client closes`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
+        val wsServer = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = wsServer.localPort
+        val wsHitCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val wsClosedLatch = java.util.concurrent.CountDownLatch(1)
+
+        val wsThread = Thread {
+            while (!wsServer.isClosed) {
+                val s = try {
+                    wsServer.accept()
+                } catch (_: Exception) {
+                    break
+                }
+                wsHitCount.incrementAndGet()
+                Thread {
+                    s.use { sock ->
+                        val inp = java.io.BufferedInputStream(sock.getInputStream())
+                        val out = sock.getOutputStream()
+                        var wsKey = ""
+                        while (true) {
+                            val sb = StringBuilder()
+                            while (true) {
+                                val c = inp.read()
+                                if (c < 0 || c == '\n'.code) break
+                                if (c != '\r'.code) sb.append(c.toChar())
+                            }
+                            val line = sb.toString()
+                            if (line.isEmpty()) break
+                            if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                                wsKey = line.substringAfter(':').trim()
+                            }
+                        }
+                        val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                            .digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII))
+                        val accept = android.util.Base64.encodeToString(sha1, android.util.Base64.NO_WRAP)
+                        out.write(
+                            (
+                                "HTTP/1.1 101 Switching Protocols\r\n" +
+                                    "Upgrade: websocket\r\n" +
+                                    "Connection: Upgrade\r\n" +
+                                    "Sec-WebSocket-Accept: $accept\r\n" +
+                                    "Sec-WebSocket-Protocol: chat.v2\r\n\r\n"
+                                ).toByteArray(Charsets.US_ASCII)
+                        )
+                        out.flush()
+
+                        val b0 = inp.read()
+                        val b1 = inp.read()
+                        if (b0 < 0 || b1 < 0) return@use
+                        val masked = (b1 and 0x80) != 0
+                        val len = b1 and 0x7F
+                        val mask = if (masked) ByteArray(4).also { java.io.DataInputStream(inp).readFully(it) } else null
+                        val init = ByteArray(len).also { java.io.DataInputStream(inp).readFully(it) }
+                        if (mask != null) {
+                            for (i in init.indices) init[i] = (init[i].toInt() xor mask[i and 3].toInt()).toByte()
+                        }
+                        val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, init.copyOfRange(0, 16))
+                        val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                            .copyOfRange(0, 16)
+                        val encAck = com.example.core.AmirLocalProxy.xorBytes(expectedAck, key)
+                        out.write(0x82)
+                        out.write(encAck.size)
+                        out.write(encAck)
+                        out.flush()
+
+                        // Wait silently until AmirLocalProxy closes the WS after client closes/resets
+                        try {
+                            while (inp.read() >= 0) {
+                                // Drain payload until EOF/close
+                            }
+                        } catch (_: Exception) {
+                        } finally {
+                            wsClosedLatch.countDown()
+                        }
+                    }
+                }.start()
+            }
+        }
+        wsThread.isDaemon = true
+        wsThread.start()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "FastPathAmir",
+            protocol = ProtocolType.AMIR,
+            address = "127.0.0.1",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "ws://127.0.0.1:$wsPort/",
+            extraParam2 = ""
+        )
+        val proxy = com.example.core.AmirLocalProxy(cfg)
+        val localPort = proxy.start()
+        try {
+            // 1. Abruptly closing a SOCKS5 client TCP connection (SO_LINGER=0 reset) must close upstream WS immediately
+            java.net.Socket("127.0.0.1", localPort).use { sock ->
+                sock.soTimeout = 3000
+                sock.setSoLinger(true, 0)
+                val out = sock.getOutputStream()
+                val inp = java.io.DataInputStream(sock.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                inp.readFully(ByteArray(2))
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 8, 8, 8, 8, 0x01, 0xBB.toByte()))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.readFully(rep)
+                assertEquals(0, rep[1].toInt())
+                out.write("PARTIAL".toByteArray())
+                out.flush()
+            }
+            assertTrue(
+                "Aborted client socket must close upstream Worker WS instead of leaking it",
+                wsClosedLatch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+            )
+            assertEquals(1, wsHitCount.get())
+
+            // 2. IPv6 Cloudflare DoH 2606:4700::6810:f8f9:443 with preferIpv6=false must NOT dial Worker WS at all
+            java.net.Socket("127.0.0.1", localPort).use { dohSock ->
+                dohSock.soTimeout = 3000
+                val out = dohSock.getOutputStream()
+                val inp = java.io.DataInputStream(dohSock.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                inp.readFully(ByteArray(2))
+                val v6 = java.net.InetAddress.getByName("2606:4700::6810:f8f9").address
+                out.write(byteArrayOf(0x05, 0x01, 0x00, 0x04) + v6 + byteArrayOf(0x01, 0xBB.toByte()))
+                out.flush()
+                val rep = ByteArray(10)
+                inp.readFully(rep)
+                assertEquals(5, rep[1].toInt())
+            }
+            assertEquals(
+                "Cloudflare DoH target must not consume Worker WebSocket dials",
+                1,
+                wsHitCount.get()
+            )
+        } finally {
+            proxy.stop()
+            wsServer.close()
+        }
+    }
+
+    @Test
+    fun `MainViewModel formats country flag emoji for GeoIP connection info responses`() {
+        assertEquals("🇩🇪", com.example.ui.MainViewModel.countryCodeToFlagEmoji("de"))
+        assertEquals("🇺🇸", com.example.ui.MainViewModel.countryCodeToFlagEmoji("US"))
+        assertEquals("🇮🇷", com.example.ui.MainViewModel.countryCodeToFlagEmoji("IR"))
+        assertEquals("", com.example.ui.MainViewModel.countryCodeToFlagEmoji("INVALID"))
+
+        val ipSbParsed = com.example.ui.MainViewModel.parseConnectionInfo(
+            """{"ip":"1.2.3.4","country":"Germany","country_code":"DE","city":"Frankfurt","isp":"Cloudflare"}"""
+        )
+        assertEquals("🇩🇪", ipSbParsed.countryFlag)
+        assertEquals("Germany", ipSbParsed.countryLabel)
+        assertTrue(ipSbParsed.summaryLines.contains("Country" to "🇩🇪 Germany"))
+        assertTrue(ipSbParsed.summaryLines.contains("Code" to "DE"))
+
+        val ipApiParsed = com.example.ui.MainViewModel.parseConnectionInfo(
+            """{"query":"5.6.7.8","country":"Netherlands","countryCode":"NL"}"""
+        )
+        assertEquals("🇳🇱", ipApiParsed.countryFlag)
+        assertEquals("Netherlands", ipApiParsed.countryLabel)
+        assertTrue(ipApiParsed.summaryLines.contains("IP" to "5.6.7.8"))
+        assertTrue(ipApiParsed.summaryLines.contains("Country" to "🇳🇱 Netherlands"))
+
+        val ipInfoParsed = com.example.ui.MainViewModel.parseConnectionInfo(
+            """{"ip":"9.9.9.9","country":"FR","city":"Paris"}"""
+        )
+        assertEquals("🇫🇷", ipInfoParsed.countryFlag)
+        assertTrue(ipInfoParsed.summaryLines.contains("Country" to "🇫🇷 FR"))
     }
 }
