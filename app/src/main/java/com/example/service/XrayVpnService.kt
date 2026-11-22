@@ -180,8 +180,7 @@ class XrayVpnService : VpnService() {
                     val pfd = buildTunInterface(
                         sessionName = server.remarks,
                         settings = settings,
-                        effectiveHttpPort = runtimeHttpPort,
-                        isAmir = server.protocol == ProtocolType.AMIR
+                        effectiveHttpPort = runtimeHttpPort
                     )
                         ?: error("Failed to establish VPN interface (check VPN permission)")
                     tunInterface = pfd
@@ -287,7 +286,7 @@ class XrayVpnService : VpnService() {
         }
 
         // Pre-resolve DoH / DoT / DoQ DNS server hostnames so Xray DNS never hits a self-lookup deadlock
-        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+        if (settings.localDnsEnabled) {
             XrayConfigBuilder.extractDnsHost(settings.remoteDns)?.let { dnsHost ->
                 resolveHostIntoMap(dnsHost, "Remote DNS host")
             }
@@ -306,18 +305,15 @@ class XrayVpnService : VpnService() {
         httpPort: Int
     ) {
         val modeLabel = if (settings.vpnMode) "VPN(mtu=${settings.vpnMtu},addr=${settings.vpnInterfaceAddress})" else "ProxyOnly"
-        val usesInternalDns = protocol == ProtocolType.AMIR || settings.localDnsEnabled || settings.fakeDnsEnabled
-        val dnsLabel = buildString {
-            append("localDns=${settings.localDnsEnabled}")
-            append(",fakeDns=${settings.fakeDnsEnabled}")
-            if (protocol == ProtocolType.AMIR) {
-                append(",amirDns=dns-module+fakedns")
-            } else if (usesInternalDns) {
-                append(",remoteDns=${settings.remoteDns},directDns=${settings.domesticDns}")
-            } else {
-                append(",vpnDns=${settings.vpnDns}")
-            }
+        val dnsMode = when {
+            settings.localDnsEnabled && settings.fakeDnsEnabled ->
+                if (protocol == ProtocolType.AMIR) "hybrid-fakedns+doh(Config1)" else "hybrid-fakedns+localDns(${settings.remoteDns})"
+            settings.fakeDnsEnabled -> "pure-fakedns(198.18.0.0/15)"
+            settings.localDnsEnabled ->
+                if (protocol == ProtocolType.AMIR) "localDns(Config2-DoH)" else "localDns(remote=${settings.remoteDns},direct=${settings.domesticDns})"
+            else -> "direct-vpnDns(${settings.vpnDns})"
         }
+        val dnsLabel = "localDns=${settings.localDnsEnabled},fakeDns=${settings.fakeDnsEnabled},mode=$dnsMode"
         val extraLabel = buildString {
             append("routing=${settings.routingMode.name}(${settings.domainStrategy})")
             append(",bypassLan=${settings.bypassLan}")
@@ -363,12 +359,11 @@ class XrayVpnService : VpnService() {
     private fun buildTunInterface(
         sessionName: String,
         settings: AppSettings,
-        effectiveHttpPort: Int,
-        isAmir: Boolean = false
+        effectiveHttpPort: Int
     ): ParcelFileDescriptor? {
         val preset = AppSettings.resolveVpnInterfacePreset(settings.vpnInterfaceAddress)
         val mtu = settings.vpnMtu.coerceIn(1280, 9000)
-        val usesInternalDns = isAmir || settings.localDnsEnabled || settings.fakeDnsEnabled
+        val usesInternalDns = settings.localDnsEnabled || settings.fakeDnsEnabled
 
         val builder = Builder()
             .setSession(sessionName.ifBlank { "PalaNG" })

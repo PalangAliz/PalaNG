@@ -45,10 +45,19 @@ object XrayConfigBuilder {
         val hostsObj = buildDnsHostsObject(
             rawDnsHosts = settings.dnsHosts,
             resolvedServerHosts = resolvedServerHosts,
-            includeDoHBootstrap = effectiveLocalDns
+            includeDoHBootstrap = settings.localDnsEnabled
         )
-        if (effectiveLocalDns || hostsObj.length() > 0) {
+        if (effectiveLocalDns) {
             root.put("dns", buildDns(settings, hostsObj))
+        } else if (hostsObj.length() > 0) {
+            root.put(
+                "dns",
+                JSONObject()
+                    .put("tag", "dns-module")
+                    .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
+                    .put("hosts", hostsObj)
+                    .put("servers", JSONArray().put("localhost"))
+            )
         }
         root.put("routing", buildRouting(settings, customRules, isAmir))
 
@@ -108,11 +117,19 @@ object XrayConfigBuilder {
         runtimeSocksPort: Int?,
         runtimeHttpPort: Int?
     ): String {
+        val localDnsActive = settings.localDnsEnabled
+        val fakeDnsActive = settings.fakeDnsEnabled
+        val usesInternalDns = localDnsActive || fakeDnsActive
         val listenHost = if (settings.allowLan) "0.0.0.0" else "127.0.0.1"
+        val destOverride = JSONArray()
+            .put("http")
+            .put("tls")
+            .put("quic")
+            .apply { if (fakeDnsActive) put("fakedns") }
         val amirSniffing = JSONObject()
-            .put("destOverride", JSONArray().put("http").put("tls").put("quic").put("fakedns"))
-            .put("enabled", true)
-            .put("routeOnly", false)
+            .put("destOverride", destOverride)
+            .put("enabled", settings.sniffingEnabled || fakeDnsActive)
+            .put("routeOnly", if (fakeDnsActive) false else settings.routeOnly)
 
         val hasAuth = settings.localProxyUsername.isNotBlank() || settings.localProxyPassword.isNotBlank()
         val accountsArr = if (hasAuth) {
@@ -211,97 +228,175 @@ object XrayConfigBuilder {
                     .put("protocol", "blackhole")
                     .put("settings", JSONObject())
             )
-            .put(
+        if (usesInternalDns) {
+            outbounds.put(
                 JSONObject()
                     .put("tag", "dns-out")
                     .put("protocol", "dns")
             )
+        }
 
         val hostsObj = buildDnsHostsObject(
             rawDnsHosts = settings.dnsHosts,
             resolvedServerHosts = resolvedServerHosts,
-            includeDoHBootstrap = true
+            includeDoHBootstrap = localDnsActive
         )
-        val dnsServers = JSONArray()
-            .put(
-                JSONObject()
-                    .put("address", "fakedns")
-                    .put(
-                        "domains",
-                        JSONArray()
-                            .put("geosite:cn")
-                            .put("geosite:google")
-                            .put("geosite:private")
-                            .put("domain:alidns.com")
-                            .put("domain:doh.pub")
-                            .put("domain:dot.pub")
-                            .put("domain:360.cn")
-                            .put("domain:onedns.net")
-                            .put("geosite:cn")
-                    )
-            )
-            .put("https://cloudflare-dns.com/dns-query")
-            .put(
-                JSONObject()
-                    .put("address", "223.5.5.5")
-                    .put("domains", JSONArray().put("geosite:cn"))
-                    .put("expectIPs", JSONArray().put("geoip:cn"))
-                    .put("skipFallback", true)
-                    .put("tag", "domestic-dns_cn_expect_0")
-            )
-            .put(
-                JSONObject()
-                    .put("address", "https://cloudflare-dns.com/dns-query")
-                    .put("domains", JSONArray().put("geosite:google"))
-            )
-            .put(
-                JSONObject()
-                    .put("address", "223.5.5.5")
-                    .put("domains", JSONArray().put("geosite:private"))
-                    .put("skipFallback", true)
-                    .put("tag", "domestic-dns_1_0")
-            )
-            .put(
-                JSONObject()
-                    .put("address", "223.5.5.5")
-                    .put(
-                        "domains",
-                        JSONArray()
-                            .put("domain:alidns.com")
-                            .put("domain:doh.pub")
-                            .put("domain:dot.pub")
-                            .put("domain:360.cn")
-                            .put("domain:onedns.net")
-                    )
-                    .put("skipFallback", true)
-                    .put("tag", "domestic-dns_2_0")
-            )
-            .put(
-                JSONObject()
-                    .put("address", "223.5.5.5")
-                    .put("domains", JSONArray().put("geosite:cn"))
-                    .put("skipFallback", true)
-                    .put("tag", "domestic-dns_3_0")
-            )
-            .put("https://dns.google/dns-query")
 
-        val dnsObj = JSONObject()
-            .put("hosts", hostsObj)
-            .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
-            .put("servers", dnsServers)
-            .put("tag", "dns-module")
-
-        val fakeDnsArr = JSONArray().put(
+        val dnsObj: JSONObject? = if (usesInternalDns) {
+            val dnsServers = JSONArray()
+            when {
+                fakeDnsActive && localDnsActive -> {
+                    // Config 1 (Amir baseline with FakeDNS + DoH fallback & domestic bypass)
+                    dnsServers
+                        .put(
+                            JSONObject()
+                                .put("address", "fakedns")
+                                .put(
+                                    "domains",
+                                    JSONArray()
+                                        .put("geosite:cn")
+                                        .put("geosite:google")
+                                        .put("geosite:private")
+                                        .put("domain:alidns.com")
+                                        .put("domain:doh.pub")
+                                        .put("domain:dot.pub")
+                                        .put("domain:360.cn")
+                                        .put("domain:onedns.net")
+                                        .put("geosite:cn")
+                                )
+                        )
+                        .put("https://cloudflare-dns.com/dns-query")
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put("domains", JSONArray().put("geosite:cn"))
+                                .put("expectIPs", JSONArray().put("geoip:cn"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_cn_expect_0")
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "https://cloudflare-dns.com/dns-query")
+                                .put("domains", JSONArray().put("geosite:google"))
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put("domains", JSONArray().put("geosite:private"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_1_0")
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put(
+                                    "domains",
+                                    JSONArray()
+                                        .put("domain:alidns.com")
+                                        .put("domain:doh.pub")
+                                        .put("domain:dot.pub")
+                                        .put("domain:360.cn")
+                                        .put("domain:onedns.net")
+                                )
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_2_0")
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put("domains", JSONArray().put("geosite:cn"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_3_0")
+                        )
+                        .put("https://dns.google/dns-query")
+                }
+                fakeDnsActive && !localDnsActive -> {
+                    // Pure FakeDNS: return 198.18.0.0/15 immediately for all domains without querying remote DoH
+                    dnsServers
+                        .put("fakedns")
+                        .put("localhost")
+                }
+                else -> {
+                    // Config 2 (Amir Simple Local DNS without FakeDNS: real IP lookups via DoH)
+                    dnsServers
+                        .put("https://cloudflare-dns.com/dns-query")
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put("domains", JSONArray().put("geosite:cn"))
+                                .put("expectIPs", JSONArray().put("geoip:cn"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_cn_expect_0")
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "https://cloudflare-dns.com/dns-query")
+                                .put("domains", JSONArray().put("geosite:google"))
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put("domains", JSONArray().put("geosite:private"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_1_0")
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put(
+                                    "domains",
+                                    JSONArray()
+                                        .put("domain:alidns.com")
+                                        .put("domain:doh.pub")
+                                        .put("domain:dot.pub")
+                                        .put("domain:360.cn")
+                                        .put("domain:onedns.net")
+                                )
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_2_0")
+                        )
+                        .put(
+                            JSONObject()
+                                .put("address", "223.5.5.5")
+                                .put("domains", JSONArray().put("geosite:cn"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_3_0")
+                        )
+                        .put("https://dns.google/dns-query")
+                }
+            }
             JSONObject()
-                .put("ipPool", "198.18.0.0/15")
-                .put("poolSize", 10000)
-        )
-        if (settings.enableIpv6 || settings.preferIpv6) {
-            fakeDnsArr.put(
-                JSONObject()
-                    .put("ipPool", "fc00::/18")
-                    .put("poolSize", 10000)
-            )
+                .put("hosts", hostsObj)
+                .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
+                .put("servers", dnsServers)
+                .put("tag", "dns-module")
+        } else if (hostsObj.length() > 0) {
+            JSONObject()
+                .put("hosts", hostsObj)
+                .put("queryStrategy", if (settings.preferIpv6) "UseIP" else "UseIPv4")
+                .put("servers", JSONArray().put("localhost"))
+                .put("tag", "dns-module")
+        } else {
+            null
+        }
+
+        val fakeDnsArr: JSONArray? = if (fakeDnsActive) {
+            JSONArray().apply {
+                put(
+                    JSONObject()
+                        .put("ipPool", "198.18.0.0/15")
+                        .put("poolSize", 10000)
+                )
+                if (settings.enableIpv6 || settings.preferIpv6) {
+                    put(
+                        JSONObject()
+                            .put("ipPool", "fc00::/18")
+                            .put("poolSize", 10000)
+                    )
+                }
+            }
+        } else {
+            null
         }
 
         val cnDnsIps = JSONArray()
@@ -321,13 +416,28 @@ object XrayConfigBuilder {
             .put("117.50.60.30").put("52.80.60.30")
 
         val rules = JSONArray()
-            .put(
+        if (usesInternalDns) {
+            rules.put(
                 JSONObject()
                     .put("type", "field")
                     .put("inboundTag", activeInboundTags)
                     .put("port", "53")
                     .put("outboundTag", "dns-out")
             )
+        }
+        if (fakeDnsActive) {
+            val fakeIps = JSONArray().put("198.18.0.0/15")
+            if (settings.enableIpv6 || settings.preferIpv6) {
+                fakeIps.put("fc00::/18")
+            }
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("ip", fakeIps)
+                    .put("outboundTag", "proxy")
+            )
+        }
+        rules
             .put(
                 JSONObject()
                     .put("type", "field")
@@ -385,35 +495,43 @@ object XrayConfigBuilder {
                     .put("domain", JSONArray().put("geosite:cn"))
                     .put("outboundTag", "direct")
             )
-            .put(
-                JSONObject()
-                    .put("type", "field")
-                    .put(
-                        "inboundTag",
-                        JSONArray()
-                            .put("domestic-dns_1_0")
-                            .put("domestic-dns_2_0")
-                            .put("domestic-dns_3_0")
-                            .put("domestic-dns_cn_expect_0")
-                    )
-                    .put("outboundTag", "direct")
-            )
-            .put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("inboundTag", JSONArray().put("dns-module"))
-                    .put("outboundTag", "proxy")
-            )
-            .put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("port", "0-65535")
-                    .put("outboundTag", "proxy")
-            )
+        if (localDnsActive) {
+            rules
+                .put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put(
+                            "inboundTag",
+                            JSONArray()
+                                .put("domestic-dns_1_0")
+                                .put("domestic-dns_2_0")
+                                .put("domestic-dns_3_0")
+                                .put("domestic-dns_cn_expect_0")
+                        )
+                        .put("outboundTag", "direct")
+                )
+                .put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put("inboundTag", JSONArray().put("dns-module"))
+                        .put("outboundTag", "proxy")
+                )
+        }
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("port", "0-65535")
+                .put("outboundTag", "proxy")
+        )
 
-        return JSONObject()
-            .put("dns", dnsObj)
-            .put("fakedns", fakeDnsArr)
+        val root = JSONObject()
+        if (dnsObj != null) {
+            root.put("dns", dnsObj)
+        }
+        if (fakeDnsArr != null) {
+            root.put("fakedns", fakeDnsArr)
+        }
+        return root
             .put("inbounds", inbounds)
             .put("log", JSONObject().put("loglevel", settings.logLevel.ifBlank { "warning" }))
             .put("outbounds", outbounds)
@@ -421,7 +539,7 @@ object XrayConfigBuilder {
             .put(
                 "routing",
                 JSONObject()
-                    .put("domainStrategy", "AsIs")
+                    .put("domainStrategy", if (localDnsActive && !fakeDnsActive && settings.domainStrategy.isNotBlank()) settings.domainStrategy else "AsIs")
                     .put("rules", rules)
             )
             .put("stats", JSONObject())
@@ -682,12 +800,14 @@ object XrayConfigBuilder {
                 put("settings", JSONObject())
             }
         )
-        outbounds.put(
-            JSONObject().apply {
-                put("tag", "dns-out")
-                put("protocol", "dns")
-            }
-        )
+        if (settings.localDnsEnabled || settings.fakeDnsEnabled) {
+            outbounds.put(
+                JSONObject().apply {
+                    put("tag", "dns-out")
+                    put("protocol", "dns")
+                }
+            )
+        }
         return outbounds
     }
 
@@ -1144,117 +1264,114 @@ object XrayConfigBuilder {
         val domestic = settings.domesticDns.trim().ifBlank { "223.5.5.5" }
         val configuredRemote = settings.remoteDns.trim().ifBlank { "https://1.1.1.1/dns-query" }
 
+        // Per V2Ray/Xray DNS precedence rules (v2ray.com/en/configuration/dns.html):
+        // Server entries with a "domains" array are matched BEFORE entries without "domains".
+        // Never add a "domains": ["geosite:google"] DoH override when FakeDNS is enabled,
+        // otherwise Google/YouTube domains bypass FakeDNS completely!
         if (settings.fakeDnsEnabled) {
             servers.put("fakedns")
         }
 
-        servers.put(configuredRemote)
+        if (settings.localDnsEnabled) {
+            servers.put(configuredRemote)
+            if (!configuredRemote.contains("dns.google", ignoreCase = true)) {
+                servers.put("https://dns.google/dns-query")
+            }
 
-        when (settings.routingMode) {
-            RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
-                servers.put(
-                    JSONObject()
-                        .put("address", domestic)
-                        .put("domains", JSONArray().put("geosite:cn"))
-                        .put("expectIPs", JSONArray().put("geoip:cn"))
-                        .put("skipFallback", true)
-                        .put("tag", "domestic-dns_cn_expect_0")
-                )
-                servers.put(
-                    JSONObject()
-                        .put("address", configuredRemote)
-                        .put("domains", JSONArray().put("geosite:google"))
-                )
-                if (settings.bypassLan) {
+            when (settings.routingMode) {
+                RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
                     servers.put(
                         JSONObject()
                             .put("address", domestic)
-                            .put("domains", JSONArray().put("geosite:private"))
+                            .put("domains", JSONArray().put("geosite:cn"))
+                            .put("expectIPs", JSONArray().put("geoip:cn"))
                             .put("skipFallback", true)
-                            .put("tag", "domestic-dns_1_0")
+                            .put("tag", "domestic-dns_cn_expect_0")
                     )
-                }
-                servers.put(
-                    JSONObject()
-                        .put("address", domestic)
-                        .put(
-                            "domains",
-                            JSONArray()
-                                .put("domain:alidns.com")
-                                .put("domain:doh.pub")
-                                .put("domain:dot.pub")
-                                .put("domain:360.cn")
-                                .put("domain:onedns.net")
+                    if (settings.bypassLan) {
+                        servers.put(
+                            JSONObject()
+                                .put("address", domestic)
+                                .put("domains", JSONArray().put("geosite:private"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_1_0")
                         )
-                        .put("skipFallback", true)
-                        .put("tag", "domestic-dns_2_0")
-                )
-                servers.put(
-                    JSONObject()
-                        .put("address", domestic)
-                        .put("domains", JSONArray().put("geosite:cn"))
-                        .put("skipFallback", true)
-                        .put("tag", "domestic-dns_3_0")
-                )
-            }
-            RoutingMode.BYPASS_LAN_AND_IR -> {
-                servers.put(
-                    JSONObject()
-                        .put("address", domestic)
-                        .put("domains", JSONArray().put("geosite:ir").put("regexp:.*\\.ir$"))
-                        .put("expectIPs", JSONArray().put("geoip:ir"))
-                        .put("skipFallback", true)
-                        .put("tag", "domestic-dns_ir_expect_0")
-                )
-                servers.put(
-                    JSONObject()
-                        .put("address", configuredRemote)
-                        .put("domains", JSONArray().put("geosite:google"))
-                )
-                if (settings.bypassLan) {
+                    }
                     servers.put(
                         JSONObject()
                             .put("address", domestic)
-                            .put("domains", JSONArray().put("geosite:private"))
+                            .put(
+                                "domains",
+                                JSONArray()
+                                    .put("domain:alidns.com")
+                                    .put("domain:doh.pub")
+                                    .put("domain:dot.pub")
+                                    .put("domain:360.cn")
+                                    .put("domain:onedns.net")
+                            )
                             .put("skipFallback", true)
-                            .put("tag", "domestic-dns_1_0")
+                            .put("tag", "domestic-dns_2_0")
                     )
-                }
-                servers.put(
-                    JSONObject()
-                        .put("address", domestic)
-                        .put("domains", JSONArray().put("geosite:ir").put("regexp:.*\\.ir$"))
-                        .put("skipFallback", true)
-                        .put("tag", "domestic-dns_2_0")
-                )
-            }
-            else -> {
-                servers.put(
-                    JSONObject()
-                        .put("address", configuredRemote)
-                        .put("domains", JSONArray().put("geosite:google"))
-                )
-                if (settings.bypassLan) {
                     servers.put(
                         JSONObject()
                             .put("address", domestic)
-                            .put("domains", JSONArray().put("geosite:private"))
+                            .put("domains", JSONArray().put("geosite:cn"))
                             .put("skipFallback", true)
-                            .put("tag", "domestic-dns_1_0")
+                            .put("tag", "domestic-dns_3_0")
                     )
                 }
+                RoutingMode.BYPASS_LAN_AND_IR -> {
+                    servers.put(
+                        JSONObject()
+                            .put("address", domestic)
+                            .put("domains", JSONArray().put("geosite:ir").put("regexp:.*\\.ir$"))
+                            .put("expectIPs", JSONArray().put("geoip:ir"))
+                            .put("skipFallback", true)
+                            .put("tag", "domestic-dns_ir_expect_0")
+                    )
+                    if (settings.bypassLan) {
+                        servers.put(
+                            JSONObject()
+                                .put("address", domestic)
+                                .put("domains", JSONArray().put("geosite:private"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_1_0")
+                        )
+                    }
+                    servers.put(
+                        JSONObject()
+                            .put("address", domestic)
+                            .put("domains", JSONArray().put("geosite:ir").put("regexp:.*\\.ir$"))
+                            .put("skipFallback", true)
+                            .put("tag", "domestic-dns_2_0")
+                    )
+                }
+                else -> {
+                    if (settings.bypassLan) {
+                        servers.put(
+                            JSONObject()
+                                .put("address", domestic)
+                                .put("domains", JSONArray().put("geosite:private"))
+                                .put("skipFallback", true)
+                                .put("tag", "domestic-dns_1_0")
+                        )
+                    }
+                }
             }
-        }
 
-        // Bootstrap fallback if Remote DNS uses a custom hostname not in hostsObj
-        val remoteDnsHost = extractDnsHost(configuredRemote)
-        if (remoteDnsHost != null && !hostsObj.has(remoteDnsHost)) {
-            servers.put(
-                JSONObject()
-                    .put("address", if (isIpLiteral(domestic)) domestic else "223.5.5.5")
-                    .put("domains", JSONArray().put("full:$remoteDnsHost"))
-                    .put("skipFallback", true)
-            )
+            // Bootstrap fallback if Remote DNS uses a custom hostname not in hostsObj
+            val remoteDnsHost = extractDnsHost(configuredRemote)
+            if (remoteDnsHost != null && !hostsObj.has(remoteDnsHost)) {
+                servers.put(
+                    JSONObject()
+                        .put("address", if (isIpLiteral(domestic)) domestic else "223.5.5.5")
+                        .put("domains", JSONArray().put("full:$remoteDnsHost"))
+                        .put("skipFallback", true)
+                )
+            }
+        } else if (settings.fakeDnsEnabled) {
+            // Pure FakeDNS mode (Local DNS OFF): keep non-A/AAAA fallback local without remote DoH queries
+            servers.put("localhost")
         }
 
         val dnsObj = JSONObject()
@@ -1316,39 +1433,41 @@ object XrayConfigBuilder {
                 )
             }
 
-            val domesticTags = JSONArray().apply {
-                when (settings.routingMode) {
-                    RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
-                        if (settings.bypassLan) put("domestic-dns_1_0")
-                        put("domestic-dns_2_0")
-                        put("domestic-dns_3_0")
-                        put("domestic-dns_cn_expect_0")
-                    }
-                    RoutingMode.BYPASS_LAN_AND_IR -> {
-                        if (settings.bypassLan) put("domestic-dns_1_0")
-                        put("domestic-dns_2_0")
-                        put("domestic-dns_ir_expect_0")
-                    }
-                    else -> {
-                        if (settings.bypassLan) put("domestic-dns_1_0")
+            if (settings.localDnsEnabled) {
+                val domesticTags = JSONArray().apply {
+                    when (settings.routingMode) {
+                        RoutingMode.BYPASS_LAN_AND_MAINLAND -> {
+                            if (settings.bypassLan) put("domestic-dns_1_0")
+                            put("domestic-dns_2_0")
+                            put("domestic-dns_3_0")
+                            put("domestic-dns_cn_expect_0")
+                        }
+                        RoutingMode.BYPASS_LAN_AND_IR -> {
+                            if (settings.bypassLan) put("domestic-dns_1_0")
+                            put("domestic-dns_2_0")
+                            put("domestic-dns_ir_expect_0")
+                        }
+                        else -> {
+                            if (settings.bypassLan) put("domestic-dns_1_0")
+                        }
                     }
                 }
-            }
-            if (domesticTags.length() > 0) {
+                if (domesticTags.length() > 0) {
+                    rules.put(
+                        JSONObject()
+                            .put("type", "field")
+                            .put("inboundTag", domesticTags)
+                            .put("outboundTag", "direct")
+                    )
+                }
+
                 rules.put(
                     JSONObject()
                         .put("type", "field")
-                        .put("inboundTag", domesticTags)
-                        .put("outboundTag", "direct")
+                        .put("inboundTag", JSONArray().put("dns-module"))
+                        .put("outboundTag", "proxy")
                 )
             }
-
-            rules.put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("inboundTag", JSONArray().put("dns-module"))
-                    .put("outboundTag", "proxy")
-            )
         }
 
         if (settings.fakeDnsEnabled) {
@@ -1495,7 +1614,9 @@ object XrayConfigBuilder {
             settings.routingMode == RoutingMode.BYPASS_LAN_AND_MAINLAND ||
             (settings.routingMode == RoutingMode.CUSTOM && customRules.any { it.enabled && it.ips.isNotBlank() })
         val configuredStrategy = settings.domainStrategy.ifBlank { "IPIfNonMatch" }
-        val effectiveDomainStrategy = if (!needsRouterIpResolution && configuredStrategy == "IPIfNonMatch") {
+        val effectiveDomainStrategy = if (!settings.localDnsEnabled && !settings.fakeDnsEnabled) {
+            "AsIs"
+        } else if (!needsRouterIpResolution && configuredStrategy == "IPIfNonMatch") {
             "AsIs"
         } else {
             configuredStrategy

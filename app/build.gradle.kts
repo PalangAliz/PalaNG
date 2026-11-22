@@ -69,6 +69,7 @@ android {
   packaging {
     jniLibs {
       useLegacyPackaging = true
+      keepDebugSymbols.add("**/*.so")
     }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }

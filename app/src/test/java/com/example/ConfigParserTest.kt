@@ -987,10 +987,21 @@ class ConfigParserTest {
         val amirServer = ConfigParser.parseSingleUri(
             "amir://63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd@twilight-dream.workers.dev:443?cleanIp=172.67.70.244#AmirNode"
         )!!
-        val amirRoot = JSONObject(
+        val amirDirectRoot = JSONObject(
             XrayConfigBuilder.buildFullConfig(
                 server = amirServer,
                 settings = defaults.copy(vpnMode = true),
+                customRules = emptyList(),
+                amirLocalPort = 40446
+            )
+        )
+        assertFalse("AMIR must respect fakeDnsEnabled=false", amirDirectRoot.has("fakedns"))
+        assertFalse("AMIR must respect localDnsEnabled=false & fakeDnsEnabled=false", amirDirectRoot.has("dns"))
+
+        val amirRoot = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                server = amirServer,
+                settings = defaults.copy(vpnMode = true, localDnsEnabled = true, fakeDnsEnabled = true),
                 customRules = emptyList(),
                 amirLocalPort = 40446
             )
@@ -1678,5 +1689,144 @@ class ConfigParserTest {
         )
         assertEquals("🇫🇷", ipInfoParsed.countryFlag)
         assertTrue(ipInfoParsed.summaryLines.contains("Country" to "🇫🇷 FR"))
+    }
+
+    @Test
+    fun `Local DNS and FakeDNS toggles produce distinct configs per V2Ray DNS precedence rules`() {
+        val vless = ConfigParser.parseSingleUri(
+            "vless://11111111-1111-1111-1111-111111111111@vpn.example.com:443?encryption=none&security=tls&type=tcp#VlessNode"
+        )!!
+        val amir = ConfigParser.parseSingleUri(
+            "amir://63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd@twilight-dream.workers.dev:443?cleanIp=172.67.70.244#AmirNode"
+        )!!
+
+        fun hasOutbound(root: JSONObject, tag: String): Boolean {
+            val arr = root.getJSONArray("outbounds")
+            return (0 until arr.length()).any { arr.getJSONObject(it).optString("tag") == tag }
+        }
+
+        fun hasPort53DnsRule(root: JSONObject): Boolean {
+            val rules = root.getJSONObject("routing").getJSONArray("rules")
+            return (0 until rules.length()).any {
+                val r = rules.getJSONObject(it)
+                r.optString("port") == "53" && r.optString("outboundTag") == "dns-out"
+            }
+        }
+
+        // 1. VLESS: (localDns=false, fakeDns=false) -> Direct VPN DNS mode
+        val vlessDirect = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                vless,
+                AppSettings(localDnsEnabled = false, fakeDnsEnabled = false, routingMode = RoutingMode.BYPASS_LAN_AND_IR),
+                emptyList()
+            )
+        )
+        assertFalse(vlessDirect.has("fakedns"))
+        assertFalse(hasOutbound(vlessDirect, "dns-out"))
+        assertFalse(hasPort53DnsRule(vlessDirect))
+        assertEquals("AsIs", vlessDirect.getJSONObject("routing").getString("domainStrategy"))
+
+        // 2. VLESS: (localDns=true, fakeDns=false) -> Real Local DNS only
+        val vlessLocalOnly = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                vless,
+                AppSettings(localDnsEnabled = true, fakeDnsEnabled = false, remoteDns = "https://1.1.1.1/dns-query"),
+                emptyList()
+            )
+        )
+        assertFalse(vlessLocalOnly.has("fakedns"))
+        assertTrue(hasOutbound(vlessLocalOnly, "dns-out"))
+        assertTrue(hasPort53DnsRule(vlessLocalOnly))
+        val localOnlyServers = vlessLocalOnly.getJSONObject("dns").getJSONArray("servers")
+        assertEquals("https://1.1.1.1/dns-query", localOnlyServers.getString(0))
+        assertFalse((0 until localOnlyServers.length()).any { localOnlyServers.optString(it) == "fakedns" })
+
+        // 3. VLESS: (localDns=false, fakeDns=true) -> Pure FakeDNS without remote DoH queries
+        val vlessPureFake = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                vless,
+                AppSettings(localDnsEnabled = false, fakeDnsEnabled = true, routeOnly = true),
+                emptyList()
+            )
+        )
+        assertTrue(vlessPureFake.has("fakedns"))
+        assertTrue(hasOutbound(vlessPureFake, "dns-out"))
+        assertTrue(hasPort53DnsRule(vlessPureFake))
+        val pureFakeServers = vlessPureFake.getJSONObject("dns").getJSONArray("servers")
+        assertEquals(2, pureFakeServers.length())
+        assertEquals("fakedns", pureFakeServers.getString(0))
+        assertEquals("localhost", pureFakeServers.getString(1))
+        val pureFakeSniff = vlessPureFake.getJSONArray("inbounds").getJSONObject(0).getJSONObject("sniffing")
+        assertFalse(pureFakeSniff.getBoolean("routeOnly"))
+        assertEquals("fakedns", pureFakeSniff.getJSONArray("destOverride").getString(0))
+
+        // 4. VLESS: (localDns=true, fakeDns=true) -> Hybrid FakeDNS: no geosite:google override steals from fakedns
+        val vlessHybrid = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                vless,
+                AppSettings(localDnsEnabled = true, fakeDnsEnabled = true, routingMode = RoutingMode.BYPASS_LAN_AND_IR),
+                emptyList()
+            )
+        )
+        val hybridServers = vlessHybrid.getJSONObject("dns").getJSONArray("servers")
+        assertEquals("fakedns", hybridServers.getString(0))
+        for (i in 0 until hybridServers.length()) {
+            val obj = hybridServers.optJSONObject(i) ?: continue
+            val domains = obj.optJSONArray("domains") ?: continue
+            for (j in 0 until domains.length()) {
+                assertFalse(
+                    "geosite:google must not appear in a domain-scoped DoH server that overrides fakedns",
+                    domains.getString(j) == "geosite:google"
+                )
+            }
+        }
+
+        // 5. AMIR: (localDns=false, fakeDns=false) -> Direct VPN DNS mode
+        val amirDirect = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                amir,
+                AppSettings(localDnsEnabled = false, fakeDnsEnabled = false),
+                emptyList(),
+                amirLocalPort = 40446
+            )
+        )
+        assertFalse(amirDirect.has("fakedns"))
+        assertFalse(hasOutbound(amirDirect, "dns-out"))
+        assertFalse(hasPort53DnsRule(amirDirect))
+        val amirDirectDest = amirDirect.getJSONArray("inbounds").getJSONObject(0)
+            .getJSONObject("sniffing").getJSONArray("destOverride")
+        assertFalse((0 until amirDirectDest.length()).any { amirDirectDest.getString(it) == "fakedns" })
+
+        // 6. AMIR: (localDns=true, fakeDns=false) -> Config 2 Local DNS without FakeDNS
+        val amirLocal = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                amir,
+                AppSettings(localDnsEnabled = true, fakeDnsEnabled = false),
+                emptyList(),
+                amirLocalPort = 40446
+            )
+        )
+        assertFalse(amirLocal.has("fakedns"))
+        assertTrue(hasOutbound(amirLocal, "dns-out"))
+        assertTrue(hasPort53DnsRule(amirLocal))
+        assertEquals("https://cloudflare-dns.com/dns-query", amirLocal.getJSONObject("dns").getJSONArray("servers").getString(0))
+        val amirLocalDest = amirLocal.getJSONArray("inbounds").getJSONObject(0)
+            .getJSONObject("sniffing").getJSONArray("destOverride")
+        assertFalse((0 until amirLocalDest.length()).any { amirLocalDest.getString(it) == "fakedns" })
+
+        // 7. AMIR: (localDns=false, fakeDns=true) -> Pure FakeDNS for all domains
+        val amirPureFake = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                amir,
+                AppSettings(localDnsEnabled = false, fakeDnsEnabled = true),
+                emptyList(),
+                amirLocalPort = 40446
+            )
+        )
+        assertTrue(amirPureFake.has("fakedns"))
+        val amirPureFakeServers = amirPureFake.getJSONObject("dns").getJSONArray("servers")
+        assertEquals(2, amirPureFakeServers.length())
+        assertEquals("fakedns", amirPureFakeServers.getString(0))
+        assertEquals("localhost", amirPureFakeServers.getString(1))
     }
 }

@@ -54,6 +54,7 @@ class XrayTileService : TileService() {
         super.onStopListening()
     }
 
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
         super.onClick()
         val state = VpnStateHolder.connectionState.value
