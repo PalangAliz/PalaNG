@@ -78,7 +78,7 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun XrayNgTheme(
-    themeMode: ThemeMode = ThemeMode.LIGHT,
+    themeMode: ThemeMode = ThemeMode.DARK,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {

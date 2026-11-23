@@ -34,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
@@ -43,6 +44,9 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class XrayVpnService : VpnService() {
 
@@ -120,6 +124,8 @@ class XrayVpnService : VpnService() {
 
             runCatching {
                 AssetHelper.ensureCoreAssets(this@XrayVpnService)
+                val hasGeoIp = AssetHelper.hasGeoIp(this@XrayVpnService)
+                val hasGeoSite = AssetHelper.hasGeoSite(this@XrayVpnService)
                 val rules = app.repository.getRoutingRules()
                 val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
 
@@ -181,7 +187,9 @@ class XrayVpnService : VpnService() {
                         customRules = rules,
                         amirLocalPort = boundSocksPort,
                         resolvedServerHosts = resolvedHosts,
-                        amirDnsPort = proxy.localDnsPort
+                        amirDnsPort = proxy.localDnsPort,
+                        hasGeoIp = hasGeoIp,
+                        hasGeoSite = hasGeoSite
                     )
 
                     if (settings.logLevel != "none") {
@@ -219,6 +227,10 @@ class XrayVpnService : VpnService() {
                     registerAndroidProcessFinder(controller)
                     coreController = controller
                     controller.startLoop(configJson, pfd.fd)
+                    if (!controller.isRunning) {
+                        delay(50)
+                        check(controller.isRunning) { "Xray-core exited immediately after startup (check config/logs)" }
+                    }
 
                     VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
                     updateNotification("Connected: ${server.remarks}")
@@ -256,7 +268,9 @@ class XrayVpnService : VpnService() {
                     amirLocalPort = 0,
                     resolvedServerHosts = resolvedHosts,
                     runtimeSocksPort = runtimeSocksPort,
-                    runtimeHttpPort = runtimeHttpPort
+                    runtimeHttpPort = runtimeHttpPort,
+                    hasGeoIp = hasGeoIp,
+                    hasGeoSite = hasGeoSite
                 )
 
                 if (settings.logLevel != "none") {
@@ -301,6 +315,10 @@ class XrayVpnService : VpnService() {
                 registerAndroidProcessFinder(controller)
                 coreController = controller
                 controller.startLoop(configJson, tunFd)
+                if (!controller.isRunning) {
+                    delay(50)
+                    check(controller.isRunning) { "Xray-core exited immediately after startup (check config/logs)" }
+                }
 
                 VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
                 updateNotification("Connected: ${server.remarks}")
@@ -330,35 +348,19 @@ class XrayVpnService : VpnService() {
         return candidate
     }
 
-    private fun resolveServerAddressForDnsHosts(
+    private suspend fun resolveServerAddressForDnsHosts(
         server: ServerConfig,
         settings: AppSettings
-    ): Map<String, List<String>> {
+    ): Map<String, List<String>> = withContext(Dispatchers.IO) {
         val resolved = linkedMapOf<String, List<String>>()
         val userHosts = XrayConfigBuilder.parseDnsHosts(settings.dnsHosts)
+        val targets = linkedMapOf<String, String>()
 
-        fun resolveHostIntoMap(rawHost: String, label: String) {
+        fun enqueueHost(rawHost: String, label: String) {
             val host = rawHost.trim().removePrefix("[").removeSuffix("]")
             if (host.isEmpty() || isIpLiteral(host) || host.equals("localhost", ignoreCase = true)) return
             if (userHosts.containsKey(host) || userHosts.containsKey("domain:$host") || userHosts.containsKey("full:$host")) return
-            if (resolved.containsKey(host)) return
-            runCatching {
-                val allAddrs = InetAddress.getAllByName(host).toList()
-                val filtered = if (settings.preferIpv6) {
-                    val v6 = allAddrs.filterIsInstance<Inet6Address>().mapNotNull { it.hostAddress }
-                    val v4 = allAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
-                    v6 + v4
-                } else {
-                    allAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
-                        .ifEmpty { allAddrs.mapNotNull { it.hostAddress } }
-                }
-                if (filtered.isNotEmpty()) {
-                    resolved[host] = filtered.distinct()
-                    if (settings.logLevel != "none") {
-                        VpnStateHolder.appendLog("Pre-resolved $label $host -> ${filtered.first()}")
-                    }
-                }
-            }
+            targets.putIfAbsent(host, label)
         }
 
         val isAmir = server.protocol == ProtocolType.AMIR
@@ -366,24 +368,64 @@ class XrayVpnService : VpnService() {
             val workerUrl = ConfigParser.normalizeAmirWorkerUrl(server.extraParam1.ifBlank { server.address })
             val workerHost = runCatching { Uri.parse(workerUrl).host.orEmpty() }.getOrDefault("")
                 .ifBlank { server.address.trim() }
-            resolveHostIntoMap(workerHost, "Amir Worker host")
-        } else if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD &&
-            server.protocol != ProtocolType.CUSTOM
-        ) {
-            resolveHostIntoMap(server.address, "outbound host")
+            enqueueHost(workerHost, "Amir Worker host")
+        } else {
+            if (settings.outboundDomainResolve == AppSettings.OUTBOUND_RESOLVE_AND_ADD &&
+                server.protocol != ProtocolType.CUSTOM
+            ) {
+                enqueueHost(server.address, "outbound host")
+            }
+            // Pre-resolve DoH / DoT / DoQ DNS server hostnames so Xray DNS never hits a self-lookup deadlock
+            if (settings.localDnsEnabled) {
+                XrayConfigBuilder.extractDnsHost(settings.remoteDns)?.let { dnsHost ->
+                    enqueueHost(dnsHost, "Remote DNS host")
+                }
+                XrayConfigBuilder.extractDnsHost(settings.domesticDns)?.let { domHost ->
+                    enqueueHost(domHost, "Direct DNS host")
+                }
+            }
         }
 
-        // Pre-resolve DoH / DoT / DoQ DNS server hostnames so Xray DNS never hits a self-lookup deadlock
-        if (settings.localDnsEnabled) {
-            XrayConfigBuilder.extractDnsHost(settings.remoteDns)?.let { dnsHost ->
-                resolveHostIntoMap(dnsHost, "Remote DNS host")
-            }
-            XrayConfigBuilder.extractDnsHost(settings.domesticDns)?.let { domHost ->
-                resolveHostIntoMap(domHost, "Direct DNS host")
+        if (targets.isEmpty()) return@withContext resolved
+
+        val deadlineMs = System.currentTimeMillis() + 1_500L
+        val futures = targets.map { (host, label) ->
+            Triple(
+                host,
+                label,
+                CompletableFuture.supplyAsync({
+                    runCatching { InetAddress.getAllByName(host).toList() }.getOrDefault(emptyList())
+                }, startupDnsExecutor)
+            )
+        }
+
+        for ((host, label, future) in futures) {
+            val remainingMs = (deadlineMs - System.currentTimeMillis()).coerceAtLeast(1L)
+            val allAddrs = runCatching {
+                future.get(remainingMs, TimeUnit.MILLISECONDS)
+            }.getOrDefault(emptyList())
+
+            val validPublicAddrs = allAddrs.filter { AmirLocalProxy.isValidPublicServerIp(it) }
+            val filtered = if (settings.preferIpv6) {
+                val v6 = validPublicAddrs.filterIsInstance<Inet6Address>().mapNotNull { it.hostAddress }
+                val v4 = validPublicAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
+                v6 + v4
+            } else {
+                validPublicAddrs.filterIsInstance<Inet4Address>().mapNotNull { it.hostAddress }
+                    .ifEmpty { validPublicAddrs.mapNotNull { it.hostAddress } }
+            }.distinct()
+
+            if (filtered.isNotEmpty()) {
+                resolved[host] = filtered
+                if (settings.logLevel != "none") {
+                    VpnStateHolder.appendLog("Pre-resolved $label $host -> ${filtered.first()}")
+                }
+            } else if (allAddrs.isNotEmpty() && settings.logLevel != "none") {
+                VpnStateHolder.appendLog("Ignored poisoned DNS for $label $host -> ${allAddrs.first().hostAddress}")
             }
         }
 
-        return resolved
+        resolved
     }
 
     private fun logEffectiveSettingsSummary(
@@ -774,6 +816,9 @@ class XrayVpnService : VpnService() {
         const val EXTRA_TEST_URL = "test_url"
         private const val CHANNEL_ID = "xrayng_vpn_channel"
         private const val NOTIFICATION_ID = 1001
+        private val startupDnsExecutor = Executors.newCachedThreadPool { r ->
+            Thread(r, "StartupDnsResolve").apply { isDaemon = true }
+        }
 
         fun start(context: Context, serverId: String) {
             val intent = Intent(context, XrayVpnService::class.java).apply {

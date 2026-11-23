@@ -98,6 +98,16 @@ object AssetHelper {
         }.getOrElse { -1L }
     }
 
+    fun hasGeoIp(context: Context): Boolean {
+        val f = File(context.filesDir, "geoip.dat")
+        return f.exists() && f.length() > 1024L
+    }
+
+    fun hasGeoSite(context: Context): Boolean {
+        val f = File(context.filesDir, "geosite.dat")
+        return f.exists() && f.length() > 1024L
+    }
+
     fun getAssetInfos(context: Context): List<GeoAssetInfo> {
         val dir = context.filesDir
         return geoFiles.map { name ->

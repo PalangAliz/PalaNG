@@ -697,10 +697,10 @@ class ConfigParserTest {
         assertNotNull("Expected Xray 'proxy' SOCKS outbound pointing to standalone AMIR core", proxyOutbound)
         assertEquals("socks", proxyOutbound!!.getString("protocol"))
         assertFalse("Xray must keep mux disabled for AMIR SOCKS outbound", proxyOutbound.getJSONObject("mux").getBoolean("enabled"))
-        assertFalse(
-            "Xray must not attach dialerProxy/fragment sockopt to AMIR SOCKS outbound",
-            proxyOutbound.getJSONObject("streamSettings").has("sockopt")
-        )
+        val amirSockopt = proxyOutbound.getJSONObject("streamSettings").getJSONObject("sockopt")
+        assertTrue("Expected tcpNoDelay on AMIR loopback SOCKS outbound", amirSockopt.getBoolean("tcpNoDelay"))
+        assertFalse("Xray must not attach dialerProxy to AMIR SOCKS outbound", amirSockopt.has("dialerProxy"))
+        assertFalse("Xray must not attach domainStrategy sockopt to AMIR SOCKS outbound", amirSockopt.has("domainStrategy"))
         val proxySettings = proxyOutbound.getJSONObject("settings")
         assertEquals("127.0.0.1", proxySettings.getString("address"))
         assertEquals(8, proxySettings.getInt("level"))
@@ -2503,4 +2503,347 @@ class ConfigParserTest {
             wsServer.close()
         }
     }
+
+    @Test
+    fun `AmirLocalProxy isValidPublicServerIp rejects DNS poisoning and private sinkholes and accepts public IPs`() {
+        val rejected = listOf(
+            "10.10.34.34",
+            "10.10.34.35",
+            "10.0.0.1",
+            "127.0.0.1",
+            "100.64.1.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.1.1",
+            "198.18.0.1",
+            "0.0.0.0",
+            "224.0.0.1",
+            "::1",
+            "fc00::1"
+        )
+        rejected.forEach { ip ->
+            val addr = java.net.InetAddress.getByName(ip)
+            assertFalse("Expected $ip to be rejected as non-public", com.example.core.AmirLocalProxy.isValidPublicServerIp(addr))
+        }
+
+        val accepted = listOf(
+            "1.1.1.1",
+            "8.8.8.8",
+            "104.16.132.229",
+            "172.64.155.14",
+            "188.114.97.3",
+            "172.67.70.244",
+            "2606:4700:4700::1111"
+        )
+        accepted.forEach { ip ->
+            val addr = java.net.InetAddress.getByName(ip)
+            assertTrue("Expected $ip to be accepted as public", com.example.core.AmirLocalProxy.isValidPublicServerIp(addr))
+        }
+    }
+
+    @Test
+    fun `AmirLocalProxy local UDP DNS listener fast-paths AAAA when IPv6 disabled and HTTPS qtype 65 without upstream WS dials`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val wsServer = java.net.ServerSocket(0, 8, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = wsServer.localPort
+        val upstreamAccepts = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val acceptThread = Thread {
+            while (!wsServer.isClosed) {
+                val s = try {
+                    wsServer.accept()
+                } catch (_: Exception) {
+                    break
+                }
+                upstreamAccepts.incrementAndGet()
+                runCatching { s.close() }
+            }
+        }
+        acceptThread.isDaemon = true
+        acceptThread.start()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "DnsFastPathAmir",
+            protocol = ProtocolType.AMIR,
+            address = "127.0.0.1",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "ws://127.0.0.1:$wsPort/",
+            extraParam2 = ""
+        )
+        val proxy = com.example.core.AmirLocalProxy(
+            serverConfig = cfg,
+            settings = AppSettings(enableIpv6 = false, preferIpv6 = false)
+        )
+        proxy.startDual(httpPreferredPort = 0, socksPreferredPort = 0, listenHost = "127.0.0.1", dnsPreferredPort = 0)
+        val dnsPort = proxy.localDnsPort
+        assertTrue("Expected bound localDnsPort > 0", dnsPort > 0)
+
+        try {
+            fun buildQuery(txId: Int, qtype: Int): ByteArray {
+                val l1 = "example".toByteArray(Charsets.US_ASCII)
+                val l2 = "com".toByteArray(Charsets.US_ASCII)
+                val bos = java.io.ByteArrayOutputStream()
+                bos.write(
+                    byteArrayOf(
+                        ((txId ushr 8) and 0xFF).toByte(),
+                        (txId and 0xFF).toByte(),
+                        0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                    )
+                )
+                bos.write(l1.size); bos.write(l1)
+                bos.write(l2.size); bos.write(l2)
+                bos.write(0x00)
+                bos.write(byteArrayOf(((qtype ushr 8) and 0xFF).toByte(), (qtype and 0xFF).toByte(), 0x00, 0x01))
+                return bos.toByteArray()
+            }
+
+            listOf(0x3101 to 28, 0x3102 to 65).forEach { (txId, qtype) ->
+                val query = buildQuery(txId, qtype)
+                java.net.DatagramSocket().use { udp ->
+                    udp.soTimeout = 1500
+                    udp.send(
+                        java.net.DatagramPacket(
+                            query,
+                            query.size,
+                            java.net.InetAddress.getByName("127.0.0.1"),
+                            dnsPort
+                        )
+                    )
+                    val buf = ByteArray(512)
+                    val pkt = java.net.DatagramPacket(buf, buf.size)
+                    udp.receive(pkt)
+                    val resp = pkt.data.copyOfRange(0, pkt.length)
+                    val respTx = ((resp[0].toInt() and 0xFF) shl 8) or (resp[1].toInt() and 0xFF)
+                    assertEquals(txId, respTx)
+                    assertTrue("Expected QR=1 response bit", (resp[2].toInt() and 0x80) != 0)
+                    assertEquals("Expected NOERROR RCODE=0", 0, resp[3].toInt() and 0x0F)
+                    val anCount = ((resp[6].toInt() and 0xFF) shl 8) or (resp[7].toInt() and 0xFF)
+                    assertEquals("Expected NODATA ANCOUNT=0", 0, anCount)
+                }
+            }
+            assertEquals("Expected ZERO upstream WS dials for AAAA (IPv6 off) & HTTPS (qtype 65)", 0, upstreamAccepts.get())
+        } finally {
+            proxy.stop()
+            wsServer.close()
+        }
+    }
+
+    @Test
+    fun `XrayConfigBuilder buildFullConfig without geoip or geosite omits dat selectors cleanly`() {
+        val uri = "vless://11111111-1111-1111-1111-111111111111@example.com:443?security=tls&type=ws#VlessNoAssets"
+        val parsed = ConfigParser.parseSingleUri(uri)!!
+        val jsonStr = XrayConfigBuilder.buildFullConfig(
+            server = parsed,
+            settings = AppSettings(
+                vpnMode = true,
+                localDnsEnabled = true,
+                routingMode = RoutingMode.BYPASS_LAN_AND_IR,
+                bypassLan = true
+            ),
+            customRules = emptyList(),
+            hasGeoIp = false,
+            hasGeoSite = false
+        )
+        assertFalse("Config without assets must not reference geoip:", jsonStr.contains("geoip:"))
+        assertFalse("Config without assets must not reference geosite:", jsonStr.contains("geosite:"))
+
+        val root = JSONObject(jsonStr)
+        val rules = root.getJSONObject("routing").getJSONArray("rules")
+        var foundPrivateCidr = false
+        var foundIrRegex = false
+        for (i in 0 until rules.length()) {
+            val r = rules.getJSONObject(i)
+            val ipArr = r.optJSONArray("ip")
+            if (ipArr != null && (0 until ipArr.length()).any { ipArr.getString(it) == "192.168.0.0/16" }) {
+                foundPrivateCidr = true
+            }
+            val domArr = r.optJSONArray("domain")
+            if (domArr != null && (0 until domArr.length()).any { domArr.getString(it) == "regexp:.*\\.ir$" }) {
+                foundIrRegex = true
+            }
+        }
+        assertTrue("Expected raw private CIDR LAN bypass rule when geoip.dat is missing", foundPrivateCidr)
+        assertTrue("Expected regexp:.*\\.ir$ bypass rule even when geosite.dat is missing", foundIrRegex)
+    }
+
+    @Test
+    fun `XrayConfigBuilder AMIR buildFullConfig syncs SOCKS auth, emits port 853 block rule, and uses amir-dns for Pure FakeDNS`() {
+        val amirServer = com.example.data.model.ServerConfig(
+            remarks = "Amir proxy",
+            protocol = ProtocolType.AMIR,
+            address = "worker.example.com",
+            port = 443,
+            passwordOrId = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd",
+            extraParam1 = "wss://worker.example.com/",
+            extraParam2 = "172.67.70.244"
+        )
+        val jsonStr = XrayConfigBuilder.buildFullConfig(
+            server = amirServer,
+            settings = AppSettings(
+                vpnMode = true,
+                localDnsEnabled = false,
+                fakeDnsEnabled = true,
+                localProxyUsername = "amirUser",
+                localProxyPassword = "amirPass"
+            ),
+            customRules = emptyList(),
+            amirLocalPort = 40446,
+            amirDnsPort = 45553
+        )
+        val root = JSONObject(jsonStr)
+
+        // 1. Outbound SOCKS auth matches LocalProxy credentials
+        val proxyOutbound = (0 until root.getJSONArray("outbounds").length())
+            .map { root.getJSONArray("outbounds").getJSONObject(it) }
+            .first { it.optString("tag") == "proxy" }
+        val socksSettings = proxyOutbound.getJSONObject("settings")
+        assertEquals("amirUser", socksSettings.getString("user"))
+        assertEquals("amirPass", socksSettings.getString("pass"))
+
+        // 2. Pure FakeDNS uses amir-dns (127.0.0.1:45553) instead of dead localhost
+        val dnsServers = root.getJSONObject("dns").getJSONArray("servers")
+        assertEquals("fakedns", dnsServers.getString(0))
+        var hasAmirDnsServer = false
+        for (i in 0 until dnsServers.length()) {
+            val s = dnsServers.optJSONObject(i) ?: continue
+            if (s.optString("tag") == "amir-dns" && s.optString("address") == "127.0.0.1" && s.optInt("port") == 45553) {
+                hasAmirDnsServer = true
+            }
+        }
+        assertTrue("Expected Pure FakeDNS fallback to target live amir-dns port", hasAmirDnsServer)
+
+        // 3. Port 853 DoT probe to virtual TUN router DNS IP is blocked immediately
+        val rules = root.getJSONObject("routing").getJSONArray("rules")
+        var blocksRouterDoT = false
+        var routesAmirDnsDirect = false
+        for (i in 0 until rules.length()) {
+            val r = rules.getJSONObject(i)
+            if (r.optString("port") == "853" && r.optString("outboundTag") == "block") {
+                val ips = r.optJSONArray("ip")
+                if (ips != null && (0 until ips.length()).any { ips.getString(it) == "26.26.26.2" }) {
+                    blocksRouterDoT = true
+                }
+            }
+            val inTags = r.optJSONArray("inboundTag")
+            if (r.optString("outboundTag") == "direct" &&
+                inTags != null && (0 until inTags.length()).any { inTags.getString(it) == "amir-dns" }
+            ) {
+                routesAmirDnsDirect = true
+            }
+        }
+        assertTrue("Expected instant block rule for TCP/853 DoT probes to TUN router DNS IP", blocksRouterDoT)
+        assertTrue("Expected direct outbound rule for amir-dns tag", routesAmirDnsDirect)
+    }
+
+    @Test
+    fun `XrayConfigBuilder sets tuned policy timeouts and tcpNoDelay sockopt for throughput`() {
+        val vless = ConfigParser.parseSingleUri(
+            "vless://11111111-1111-1111-1111-111111111111@example.com:443?security=tls&type=ws#VlessSpeed"
+        )!!
+        val jsonStr = XrayConfigBuilder.buildFullConfig(
+            server = vless,
+            settings = AppSettings(vpnMode = true),
+            customRules = emptyList()
+        )
+        val root = JSONObject(jsonStr)
+        val level8 = root.getJSONObject("policy").getJSONObject("levels").getJSONObject("8")
+        assertEquals(300, level8.getInt("connIdle"))
+        assertEquals(5, level8.getInt("downlinkOnly"))
+        assertEquals(8, level8.getInt("handshake"))
+        assertEquals(2, level8.getInt("uplinkOnly"))
+
+        val outbounds = root.getJSONArray("outbounds")
+        val proxyOutbound = (0 until outbounds.length())
+            .map { outbounds.getJSONObject(it) }
+            .first { it.getString("tag") == "proxy" }
+        val proxySockopt = proxyOutbound.getJSONObject("streamSettings").getJSONObject("sockopt")
+        assertTrue(proxySockopt.getBoolean("tcpNoDelay"))
+        assertEquals(30, proxySockopt.getInt("tcpKeepAliveInterval"))
+
+        val directOutbound = (0 until outbounds.length())
+            .map { outbounds.getJSONObject(it) }
+            .first { it.getString("tag") == "direct" }
+        val directSockopt = directOutbound.getJSONObject("streamSettings").getJSONObject("sockopt")
+        assertTrue(directSockopt.getBoolean("tcpNoDelay"))
+        assertEquals(30, directSockopt.getInt("tcpKeepAliveInterval"))
+    }
+
+    @Test
+    fun `AppSettings defaults to dark leopard panther theme`() {
+        val defaults = AppSettings()
+        assertEquals(com.example.data.model.ThemeMode.DARK, defaults.themeMode)
+    }
+
+    @Test
+    fun `XrayConfigBuilder AMIR buildFullConfig emits tcpNoDelay sockopt and BYPASS_LAN_AND_IR direct rules`() {
+        val amirServer = com.example.data.model.ServerConfig(
+            remarks = "Amir fast",
+            protocol = ProtocolType.AMIR,
+            address = "worker.example.com",
+            port = 443,
+            passwordOrId = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd",
+            extraParam1 = "wss://worker.example.com/",
+            extraParam2 = "172.67.70.244"
+        )
+        val settings = AppSettings(
+            vpnMode = true,
+            localDnsEnabled = true,
+            routingMode = RoutingMode.BYPASS_LAN_AND_IR,
+            bypassLan = true
+        )
+
+        val withAssetsRoot = JSONObject(
+            XrayConfigBuilder.buildFullConfig(
+                server = amirServer,
+                settings = settings,
+                customRules = emptyList(),
+                amirLocalPort = 40446,
+                amirDnsPort = 45553,
+                hasGeoIp = true,
+                hasGeoSite = true
+            )
+        )
+        val proxyOutbound = (0 until withAssetsRoot.getJSONArray("outbounds").length())
+            .map { withAssetsRoot.getJSONArray("outbounds").getJSONObject(it) }
+            .first { it.optString("tag") == "proxy" }
+        assertTrue(
+            "Expected AMIR proxy outbound streamSettings.sockopt.tcpNoDelay == true",
+            proxyOutbound.getJSONObject("streamSettings").getJSONObject("sockopt").getBoolean("tcpNoDelay")
+        )
+
+        val withAssetsRules = withAssetsRoot.getJSONObject("routing").getJSONArray("rules")
+        val directIpValues = mutableListOf<String>()
+        val directDomainValues = mutableListOf<String>()
+        for (i in 0 until withAssetsRules.length()) {
+            val r = withAssetsRules.getJSONObject(i)
+            if (r.optString("outboundTag") == "direct") {
+                r.optJSONArray("ip")?.let { arr ->
+                    for (j in 0 until arr.length()) directIpValues.add(arr.getString(j))
+                }
+                r.optJSONArray("domain")?.let { arr ->
+                    for (j in 0 until arr.length()) directDomainValues.add(arr.getString(j))
+                }
+            }
+        }
+        assertTrue("Expected geoip:ir direct rule when geoip.dat exists", "geoip:ir" in directIpValues)
+        assertTrue("Expected geosite:ir direct rule when geosite.dat exists", "geosite:ir" in directDomainValues)
+        assertTrue("Expected regexp:.*\\.ir$ direct rule", "regexp:.*\\.ir$" in directDomainValues)
+
+        val withoutAssetsJson = XrayConfigBuilder.buildFullConfig(
+            server = amirServer,
+            settings = settings,
+            customRules = emptyList(),
+            amirLocalPort = 40446,
+            amirDnsPort = 45553,
+            hasGeoIp = false,
+            hasGeoSite = false
+        )
+        assertFalse("AMIR config without assets must omit geoip:", withoutAssetsJson.contains("geoip:"))
+        assertFalse("AMIR config without assets must omit geosite:", withoutAssetsJson.contains("geosite:"))
+        assertTrue("AMIR config without assets must retain regexp:.*\\.ir$", withoutAssetsJson.contains("regexp:.*\\\\.ir$"))
+    }
 }
+
+
+

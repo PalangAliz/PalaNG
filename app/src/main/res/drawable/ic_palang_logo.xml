@@ -5,45 +5,69 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Aggressive swept-back pointed ears, jagged wild cheek ruff & powerful lower jaw -->
+    <!-- Dark head & roaring maw silhouette -->
+    <path
+        android:fillColor="#141821"
+        android:pathData="M54,24 L42,27 L24,20 L27,36 L14,49 L21,54 L16,64 L27,69 L31,84 L41,91 L54,95 L67,91 L77,84 L81,69 L92,64 L87,54 L94,49 L81,36 L84,20 L66,27 Z" />
+
+    <path
+        android:fillColor="#080B10"
+        android:pathData="M36,68 L44,62 L54,60 L64,62 L72,68 L69,85 L54,90 L39,85 Z" />
+
+    <!-- Razor-sharp bared canine fangs & lower teeth -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39.5,67.5 L43.5,82.5 L47.2,68.5 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M68.5,67.5 L64.5,82.5 L60.8,68.5 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M43.2,84.5 L46.2,74.5 L49,84.5 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M64.8,84.5 L61.8,74.5 L59,84.5 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48.5,66.5 L50.5,71.2 L52.2,66.8 L54,71.5 L55.8,66.8 L57.5,71.2 L59.5,66.5 Z" />
+
+    <!-- Blazing amber slanted predatory eyes -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M31,42 L45,48.5 L39,53 L29,48 Z" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M77,42 L63,48.5 L69,53 L79,48 Z" />
+    <path
+        android:fillColor="#0A0D12"
+        android:pathData="M37,44.6 L38.3,48.2 L37,51.6 L35.7,48.2 Z" />
+    <path
+        android:fillColor="#0A0D12"
+        android:pathData="M71,44.6 L72.3,48.2 L71,51.6 L69.7,48.2 Z" />
+
+    <!-- Sharp angular panther head contour & cheek ruffs -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M54,18 L43,21 L34,25 L20,17 L24,35 L15,43 L22,52 L17,60 L26,69 L24,75 L35,84 L41,92 L54,95 L67,92 L73,84 L84,75 L82,69 L91,60 L86,52 L93,43 L84,35 L88,17 L74,25 L65,21 Z"
+        android:pathData="M54,24 L42,27 L24,20 L27,36 L14,49 L21,54 L16,64 L27,69 L31,84 L41,91 L54,95 L67,91 L77,84 L81,69 L92,64 L87,54 L94,49 L81,36 L84,20 L66,27 Z"
         android:strokeColor="#F8FAFC"
         android:strokeLineCap="round"
         android:strokeLineJoin="miter"
-        android:strokeWidth="3.0" />
+        android:strokeWidth="2.8" />
 
-    <!-- Deep furrowed angry V-brow ridges, snarling snout creases & ferocious open jaw -->
+    <!-- Furrowed V-brow, angular nose shield, snarling snout ridges & cheek slash marks -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M28,36 L41,42 L51,50 M80,36 L67,42 L57,50 M27,25 L27,32 L33,29 M81,25 L81,32 L75,29 M37,58 Q44,54 50,59 M71,58 Q64,54 58,59 M41,54 L47,56 M67,54 L61,56 M46,60 L54,65 L62,60 L54,56 Z M38,65 Q54,60 70,65 L73,77 Q54,88 35,77 Z"
+        android:pathData="M30,36 L49,47 L54,49 L59,47 L78,36 M48,54 L54,52 L60,54 L57,60 L54,62 L51,60 Z M36,68 L44,62 L54,60 L64,62 L72,68 M22,57 L33,59 M86,57 L75,59 M24,63 L32,64 M84,63 L76,64"
         android:strokeColor="#F8FAFC"
         android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="2.4" />
+        android:strokeLineJoin="miter"
+        android:strokeWidth="2.1" />
 
-    <!-- Razor-sharp bared upper and lower canine fangs + wild panther forehead/cheek markings -->
-    <path
-        android:fillColor="#F8FAFC"
-        android:pathData="M40,64 L43,75 L46,64 Z M62,64 L65,75 L68,64 Z M48,64 L50,68 L52,64 L54,68 L56,64 L58,68 L60,64 Z M41,79 L44,71 L46.5,79 Z M61.5,79 L64,71 L67,79 Z" />
-
-    <!-- Blazing amber predatory slanted eyes -->
-    <path
-        android:fillColor="#F59E0B"
-        android:pathData="M29,43 L44,47 L38,51 L31,48 Z M79,43 L64,47 L70,51 L77,48 Z" />
-
-    <!-- Slanted vertical predator pupils -->
-    <path
-        android:fillColor="#0B0F17"
-        android:pathData="M36.5,44.8 L38.5,45.3 L37.3,50.1 L35.6,49.6 Z M71.5,44.8 L69.5,45.3 L70.7,50.1 L72.4,49.6 Z" />
-
-    <!-- Forehead claw slash & fierce whisker/cheek accents -->
+    <!-- Amber forehead claw slash marks -->
     <path
         android:fillColor="#00000000"
-        android:pathData="M54,23 L54,32 M47,26 L49,33 M61,26 L59,33 M23,59 L31,61 M85,59 L77,61 M45,86 Q54,89 63,86"
-        android:strokeAlpha="0.82"
-        android:strokeColor="#F8FAFC"
+        android:pathData="M48,29 L50,36 M54,27 L54,38 M60,29 L58,36"
+        android:strokeColor="#F59E0B"
         android:strokeLineCap="round"
-        android:strokeWidth="1.9" />
+        android:strokeWidth="2.0" />
 </vector>

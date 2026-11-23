@@ -39,7 +39,7 @@ data class AppSettings(
     val twoColumnLayout: Boolean = false,
     val showAllGroupTab: Boolean = true,
     val dynamicColorEnabled: Boolean = false,
-    val themeMode: ThemeMode = ThemeMode.LIGHT,
+    val themeMode: ThemeMode = ThemeMode.DARK,
     val languageMode: LanguageMode = LanguageMode.SYSTEM,
     // VPN Settings
     val enableIpv6: Boolean = false,

@@ -122,7 +122,7 @@ class SettingsDataStore(private val context: Context) {
             dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: false,
             themeMode = prefs[Keys.THEME_MODE]?.let { name ->
                 ThemeMode.entries.firstOrNull { it.name == name }
-            } ?: ThemeMode.LIGHT,
+            } ?: ThemeMode.DARK,
             languageMode = prefs[Keys.LANGUAGE_MODE]?.let { name ->
                 LanguageMode.entries.firstOrNull { it.name == name }
             } ?: LanguageMode.SYSTEM,
