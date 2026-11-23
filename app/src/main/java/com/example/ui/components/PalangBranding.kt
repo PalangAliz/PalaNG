@@ -60,8 +60,8 @@ fun PalangBackdrop(
 }
 
 /**
- * Refined, calm monochrome leopard face built strictly from smooth flowing Bezier curves
- * with zero sharp angular corners.
+ * Fierce roaring wild panther emblem built from sharp predatory strokes,
+ * furrowed V-brow ridges, blazing amber slit eyes, and bared canine fangs.
  */
 @Composable
 fun PalangLineArtLogo(
@@ -70,8 +70,12 @@ fun PalangLineArtLogo(
     forceDarkInk: Boolean? = null
 ) {
     val isDark = forceDarkInk ?: LocalIsDarkTheme.current
-    val inkColor = if (isDark) Color(0xFFF8FAFC) else Color(0xFF111827)
-    val subtleInk = inkColor.copy(alpha = 0.72f)
+    val inkColor = if (isDark) Color(0xFFF8FAFC) else Color(0xFF0F172A)
+    val subtleInk = inkColor.copy(alpha = 0.80f)
+    val eyeGlow = if (isDark) Color(0xFFF59E0B) else Color(0xFFD97706)
+    val pupilColor = if (isDark) Color(0xFF090D16) else Color(0xFF0B0F17)
+    val mouthBg = if (isDark) Color(0xFF0B0F17).copy(alpha = 0.85f) else Color(0xFF111827)
+    val fangColor = if (isDark) Color(0xFFF8FAFC) else Color(0xFFFFFFFF)
 
     val semanticsModifier = if (contentDescription != null) {
         modifier.semantics {
@@ -92,93 +96,182 @@ fun PalangLineArtLogo(
             scale(scaleX = scale, scaleY = scale, pivot = Offset.Zero)
         }) {
             val outerStroke = Stroke(
-                width = 2.6f,
+                width = 3.1f,
                 cap = StrokeCap.Round,
-                join = StrokeJoin.Round
+                join = StrokeJoin.Miter
             )
             val featureStroke = Stroke(
-                width = 2.0f,
+                width = 2.4f,
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round
             )
             val detailStroke = Stroke(
-                width = 1.65f,
+                width = 1.85f,
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round
             )
 
-            // 1. Continuous smooth leopard face & rounded ears silhouette (zero sharp angles)
+            // 1. Dark roaring maw interior so bared white fangs pop with fierce contrast
+            val roarMawFill = Path().apply {
+                moveTo(38f, 65f)
+                quadraticTo(54f, 60f, 70f, 65f)
+                lineTo(73f, 77.5f)
+                quadraticTo(54f, 88f, 35f, 77.5f)
+                close()
+            }
+            drawPath(roarMawFill, color = mouthBg)
+
+            // 2. Fierce outer head silhouette: pinned-back pointed ears, jagged cheek ruff & heavy jaw
             val headContour = Path().apply {
-                moveTo(54f, 23.5f)
-                // Left crown -> rounded left ear -> soft temple -> cheek -> rounded chin
-                cubicTo(45f, 23.5f, 38.5f, 24.8f, 34.5f, 27.2f)
-                cubicTo(28.5f, 19.5f, 20.5f, 24.5f, 24.5f, 37.5f)
-                cubicTo(20.5f, 48.5f, 22.5f, 60.5f, 29.5f, 68.5f)
-                cubicTo(36f, 76.2f, 44.5f, 81.5f, 54f, 81.5f)
-                // Right mirror: rounded chin -> cheek -> temple -> rounded right ear -> crown
-                cubicTo(63.5f, 81.5f, 72f, 76.2f, 78.5f, 68.5f)
-                cubicTo(85.5f, 60.5f, 87.5f, 48.5f, 83.5f, 37.5f)
-                cubicTo(87.5f, 24.5f, 79.5f, 19.5f, 73.5f, 27.2f)
-                cubicTo(69.5f, 24.8f, 63f, 23.5f, 54f, 23.5f)
+                moveTo(54f, 18f)
+                lineTo(43f, 21f)
+                lineTo(34f, 25f)
+                lineTo(20f, 17f)
+                lineTo(24f, 35f)
+                lineTo(15f, 43f)
+                lineTo(22f, 52f)
+                lineTo(17f, 60f)
+                lineTo(26f, 69f)
+                lineTo(24f, 75f)
+                lineTo(35f, 84f)
+                lineTo(41f, 92f)
+                lineTo(54f, 95f)
+                lineTo(67f, 92f)
+                lineTo(73f, 84f)
+                lineTo(84f, 75f)
+                lineTo(82f, 69f)
+                lineTo(91f, 60f)
+                lineTo(86f, 52f)
+                lineTo(93f, 43f)
+                lineTo(84f, 35f)
+                lineTo(88f, 17f)
+                lineTo(74f, 25f)
+                lineTo(65f, 21f)
+                close()
             }
             drawPath(headContour, color = inkColor, style = outerStroke)
 
-            // 2. Flowing brow-to-muzzle twin ribbons & inner ear curves
-            val browAndMuzzle = Path().apply {
-                // Left brow curving smoothly into nose bridge & muzzle arc
-                moveTo(31.5f, 42.5f)
-                cubicTo(38.5f, 38.5f, 45f, 42f, 46.5f, 52.5f)
-                cubicTo(47.2f, 57.5f, 49.5f, 60.5f, 54f, 61.5f)
-                cubicTo(54f, 65f, 50.5f, 68f, 44.5f, 67.5f)
-                // Right brow mirror
-                moveTo(76.5f, 42.5f)
-                cubicTo(69.5f, 38.5f, 63f, 42f, 61.5f, 52.5f)
-                cubicTo(60.8f, 57.5f, 58.5f, 60.5f, 54f, 61.5f)
-                cubicTo(54f, 65f, 57.5f, 68f, 63.5f, 67.5f)
+            // 3. Furrowed angry V-brows, snarling nasal wrinkles, nose diamond & jaw frame
+            val browAndSnarl = Path().apply {
+                // Angry V-shaped furrowed brow ridges
+                moveTo(27f, 36f)
+                lineTo(41f, 42f)
+                lineTo(51f, 50f)
+                moveTo(81f, 36f)
+                lineTo(67f, 42f)
+                lineTo(57f, 50f)
+
+                // Sharp inner ear notches
+                moveTo(27f, 24.5f)
+                lineTo(27f, 32f)
+                lineTo(33f, 29f)
+                moveTo(81f, 24.5f)
+                lineTo(81f, 32f)
+                lineTo(75f, 29f)
+
+                // Aggressive nose bridge wrinkle creases
+                moveTo(41f, 53.5f)
+                lineTo(47.5f, 55.5f)
+                moveTo(67f, 53.5f)
+                lineTo(60.5f, 55.5f)
+
+                // Flared snarling upper lip & muzzle lines
+                moveTo(35f, 59f)
+                quadraticTo(44f, 54f, 50f, 59f)
+                moveTo(73f, 59f)
+                quadraticTo(64f, 54f, 58f, 59f)
+
+                // Sharp angular nose shield
+                moveTo(46f, 59.5f)
+                lineTo(54f, 65f)
+                lineTo(62f, 59.5f)
+                lineTo(54f, 56f)
+                close()
             }
-            drawPath(browAndMuzzle, color = inkColor, style = featureStroke)
+            drawPath(browAndSnarl, color = inkColor, style = featureStroke)
+            drawPath(roarMawFill, color = inkColor, style = featureStroke)
 
-            // 3. Soft curved almond eyes + curved nose + chin curve + subtle rosette arcs
-            val fineFeatures = Path().apply {
-                // Left inner ear curve
-                moveTo(32.5f, 31f)
-                quadraticTo(27.2f, 27.8f, 27.5f, 34f)
-                // Right inner ear curve
-                moveTo(75.5f, 31f)
-                quadraticTo(80.8f, 27.8f, 80.5f, 34f)
-
-                // Left smooth curved eye
-                moveTo(33.5f, 47.5f)
-                cubicTo(37f, 44.5f, 41f, 45.2f, 43f, 48.2f)
-                cubicTo(40f, 50.2f, 36.2f, 49.8f, 33.5f, 47.5f)
-
-                // Right smooth curved eye
-                moveTo(74.5f, 47.5f)
-                cubicTo(71f, 44.5f, 67f, 45.2f, 65f, 48.2f)
-                cubicTo(68f, 50.2f, 71.8f, 49.8f, 74.5f, 47.5f)
-
-                // Soft curved nose crest
-                moveTo(49.5f, 57.5f)
-                cubicTo(52.2f, 55.5f, 55.8f, 55.5f, 58.5f, 57.5f)
-                cubicTo(56.5f, 60f, 51.5f, 60f, 49.5f, 57.5f)
-
-                // Gentle chin expression arc
-                moveTo(47.5f, 73f)
-                quadraticTo(54f, 76.2f, 60.5f, 73f)
-
-                // Subtle open curved leopard rosette marks (forehead & cheeks)
-                moveTo(51.5f, 30.8f)
-                cubicTo(53.2f, 29.2f, 54.8f, 29.2f, 56.5f, 30.8f)
-                moveTo(43.8f, 34.5f)
-                cubicTo(45.5f, 32.8f, 47.2f, 33.8f, 46.2f, 36f)
-                moveTo(64.2f, 34.5f)
-                cubicTo(62.5f, 32.8f, 60.8f, 33.8f, 61.8f, 36f)
-                moveTo(27.5f, 54f)
-                cubicTo(29.8f, 52.8f, 31.8f, 54.5f, 30.2f, 57.2f)
-                moveTo(80.5f, 54f)
-                cubicTo(78.2f, 52.8f, 76.2f, 54.5f, 77.8f, 57.2f)
+            // 4. Bared upper & lower razor canine fangs + jagged incisors
+            val fangs = Path().apply {
+                // Left upper fang
+                moveTo(40f, 64f)
+                lineTo(43.2f, 75.5f)
+                lineTo(46.2f, 64f)
+                close()
+                // Right upper fang
+                moveTo(61.8f, 64f)
+                lineTo(64.8f, 75.5f)
+                lineTo(68f, 64f)
+                close()
+                // Upper incisors
+                moveTo(48.2f, 64f)
+                lineTo(50f, 68f)
+                lineTo(52f, 64f)
+                lineTo(54f, 68f)
+                lineTo(56f, 64f)
+                lineTo(58f, 68f)
+                lineTo(59.8f, 64f)
+                close()
+                // Left lower fang
+                moveTo(41f, 79.5f)
+                lineTo(44f, 70.5f)
+                lineTo(46.8f, 79.5f)
+                close()
+                // Right lower fang
+                moveTo(61.2f, 79.5f)
+                lineTo(64f, 70.5f)
+                lineTo(67f, 79.5f)
+                close()
             }
-            drawPath(fineFeatures, color = subtleInk, style = detailStroke)
+            drawPath(fangs, color = fangColor)
+
+            // 5. Blazing amber slanted predatory eyes + slit pupils
+            val fierceEyes = Path().apply {
+                moveTo(29f, 43f)
+                lineTo(44.5f, 47f)
+                lineTo(38.5f, 51f)
+                lineTo(31f, 48f)
+                close()
+                moveTo(79f, 43f)
+                lineTo(63.5f, 47f)
+                lineTo(69.5f, 51f)
+                lineTo(77f, 48f)
+                close()
+            }
+            drawPath(fierceEyes, color = eyeGlow)
+
+            val pupils = Path().apply {
+                moveTo(36.6f, 44.7f)
+                lineTo(38.6f, 45.2f)
+                lineTo(37.4f, 50.2f)
+                lineTo(35.6f, 49.6f)
+                close()
+                moveTo(71.4f, 44.7f)
+                lineTo(69.4f, 45.2f)
+                lineTo(70.6f, 50.2f)
+                lineTo(72.4f, 49.6f)
+                close()
+            }
+            drawPath(pupils, color = pupilColor)
+
+            // 6. Wild forehead claw marks, snarling cheek slashes & chin armor lines
+            val wildSlashes = Path().apply {
+                moveTo(54f, 22.5f)
+                lineTo(54f, 32.5f)
+                moveTo(47f, 25.5f)
+                lineTo(49.5f, 33.5f)
+                moveTo(61f, 25.5f)
+                lineTo(58.5f, 33.5f)
+
+                moveTo(22.5f, 59f)
+                lineTo(32f, 61.5f)
+                moveTo(85.5f, 59f)
+                lineTo(76f, 61.5f)
+
+                moveTo(44.5f, 86.5f)
+                quadraticTo(54f, 89.5f, 63.5f, 86.5f)
+            }
+            drawPath(wildSlashes, color = subtleInk, style = detailStroke)
         }
     }
 }

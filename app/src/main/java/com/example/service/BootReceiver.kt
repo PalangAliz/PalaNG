@@ -23,10 +23,7 @@ class BootReceiver : BroadcastReceiver() {
                     app.repository.getAllServers().firstOrNull()?.id.orEmpty()
                 }
                 if (targetId.isBlank()) return@launch
-                val server = app.repository.getServerById(targetId)
-                    ?: app.repository.getAllServers().firstOrNull()
-                val isAmir = server?.protocol == com.example.data.model.ProtocolType.AMIR
-                val canStart = isAmir || !settings.vpnMode || VpnService.prepare(appContext) == null
+                val canStart = !settings.vpnMode || VpnService.prepare(appContext) == null
                 if (canStart) {
                     runCatching {
                         XrayVpnService.start(appContext, targetId)

@@ -119,11 +119,19 @@ class XrayVpnService : VpnService() {
             startAsForeground(buildNotification("Connecting to ${server.remarks}…"))
 
             runCatching {
+                AssetHelper.ensureCoreAssets(this@XrayVpnService)
+                val rules = app.repository.getRoutingRules()
+                val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
+
                 if (server.protocol == ProtocolType.AMIR) {
+                    val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
                     val listenHost = if (settings.allowLan) "0.0.0.0" else "127.0.0.1"
                     val runtimeSocksPort: Int
                     val runtimeHttpPort: Int
-                    if (settings.dynamicProxyPortEnabled) {
+                    if (!effectiveLocalProxy && settings.vpnMode) {
+                        runtimeSocksPort = 0
+                        runtimeHttpPort = -1
+                    } else if (settings.dynamicProxyPortEnabled) {
                         runtimeSocksPort = allocateFreePort(fallback = settings.socksPort)
                         runtimeHttpPort = allocateFreePort(fallback = settings.httpPort, excludePorts = setOf(runtimeSocksPort))
                         VpnStateHolder.appendLog("Dynamic AMIR proxy ports allocated: HTTP=$runtimeHttpPort, SOCKS=$runtimeSocksPort")
@@ -135,40 +143,88 @@ class XrayVpnService : VpnService() {
                     val proxy = AmirLocalProxy(
                         serverConfig = server,
                         settings = settings,
-                        protectSocket = { true },
+                        resolvedHosts = resolvedHosts,
+                        protectSocket = { sock -> if (settings.vpnMode) protect(sock) else true },
                         onLog = { msg -> VpnStateHolder.appendLog(msg) }
                     )
                     amirLocalProxy = proxy
                     val (boundHttpPort, boundSocksPort) = proxy.startDual(
                         httpPreferredPort = runtimeHttpPort,
                         socksPreferredPort = runtimeSocksPort,
-                        listenHost = listenHost
+                        listenHost = listenHost,
+                        dnsPreferredPort = if (settings.vpnMode) 0 else -1
                     )
 
                     VpnStateHolder.setActiveProxy(
                         ActiveRuntimeProxy(
-                            enabled = true,
-                            socksPort = boundSocksPort,
-                            httpPort = boundHttpPort,
+                            enabled = effectiveLocalProxy,
+                            socksPort = if (effectiveLocalProxy) boundSocksPort else 0,
+                            httpPort = if (effectiveLocalProxy) boundHttpPort else 0,
                             username = settings.localProxyUsername,
                             password = settings.localProxyPassword
                         )
                     )
 
-                    VpnStateHolder.appendLog(
-                        "AMIR Direct Proxy active (no TUN, no Xray-core) • HTTP/APN: $listenHost:$boundHttpPort | SOCKS5: $listenHost:$boundSocksPort"
+                    if (!settings.vpnMode) {
+                        VpnStateHolder.appendLog(
+                            "AMIR Direct Proxy active (Proxy-Only) • HTTP/APN: $listenHost:$boundHttpPort | SOCKS5: $listenHost:$boundSocksPort"
+                        )
+                        VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
+                        updateNotification("AMIR Proxy • HTTP/APN:$boundHttpPort | SOCKS:$boundSocksPort")
+                        startTrafficMonitor(app)
+                        return@runCatching
+                    }
+
+                    val configJson = XrayConfigBuilder.buildFullConfig(
+                        server = server,
+                        settings = settings,
+                        customRules = rules,
+                        amirLocalPort = boundSocksPort,
+                        resolvedServerHosts = resolvedHosts,
+                        amirDnsPort = proxy.localDnsPort
                     )
+
+                    if (settings.logLevel != "none") {
+                        logEffectiveSettingsSummary(server.protocol, settings, boundSocksPort, boundHttpPort)
+                    }
+
+                    val pfd = buildTunInterface(
+                        sessionName = server.remarks,
+                        settings = settings,
+                        effectiveHttpPort = boundHttpPort,
+                        isAmir = true
+                    ) ?: error("Failed to establish VPN interface (check VPN permission)")
+                    tunInterface = pfd
+
+                    val callbackHandler = object : CoreCallbackHandler {
+                        override fun startup(): Long {
+                            VpnStateHolder.appendLog("AMIR VPN TUN started successfully (LocalDNS=${proxy.localDnsPort})")
+                            return 0L
+                        }
+
+                        override fun shutdown(): Long {
+                            VpnStateHolder.appendLog("AMIR VPN TUN stopped")
+                            return 0L
+                        }
+
+                        override fun onEmitStatus(status: Long, message: String?): Long {
+                            if (!message.isNullOrBlank()) {
+                                VpnStateHolder.appendLog(message)
+                            }
+                            return 0L
+                        }
+                    }
+
+                    val controller = Libv2ray.newCoreController(callbackHandler)
+                    registerAndroidProcessFinder(controller)
+                    coreController = controller
+                    controller.startLoop(configJson, pfd.fd)
+
                     VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
-                    updateNotification("AMIR Proxy • HTTP/APN:$boundHttpPort | SOCKS:$boundSocksPort")
+                    updateNotification("Connected: ${server.remarks}")
                     startTrafficMonitor(app)
                     return@runCatching
                 }
-
-                AssetHelper.ensureCoreAssets(this@XrayVpnService)
-                val rules = app.repository.getRoutingRules()
-
-                // Resolve outbound server & DoH hostnames before VPN interface starts
-                val resolvedHosts = resolveServerAddressForDnsHosts(server, settings)
 
                 // Allocate ephemeral ports when Dynamic Local Proxy Port is enabled
                 val effectiveLocalProxy = settings.effectiveLocalProxyEnabled()
@@ -211,7 +267,8 @@ class XrayVpnService : VpnService() {
                     val pfd = buildTunInterface(
                         sessionName = server.remarks,
                         settings = settings,
-                        effectiveHttpPort = runtimeHttpPort
+                        effectiveHttpPort = runtimeHttpPort,
+                        isAmir = false
                     )
                         ?: error("Failed to establish VPN interface (check VPN permission)")
                     tunInterface = pfd
@@ -390,7 +447,8 @@ class XrayVpnService : VpnService() {
     private fun buildTunInterface(
         sessionName: String,
         settings: AppSettings,
-        effectiveHttpPort: Int
+        effectiveHttpPort: Int,
+        isAmir: Boolean = false
     ): ParcelFileDescriptor? {
         val preset = AppSettings.resolveVpnInterfacePreset(settings.vpnInterfaceAddress)
         val mtu = settings.vpnMtu.coerceIn(1280, 9000)
@@ -401,7 +459,18 @@ class XrayVpnService : VpnService() {
             .setMtu(mtu)
             .addAddress(preset.clientIp, preset.prefixLength)
 
-        val parsedVpnDns = parseVpnDnsServers(settings.vpnDns, settings.enableIpv6)
+        val rawParsedVpnDns = parseVpnDnsServers(settings.vpnDns, settings.enableIpv6)
+        val parsedVpnDns = if (isAmir) {
+            rawParsedVpnDns.map { dns ->
+                when (dns) {
+                    "1.1.1.1", "1.0.0.1" -> "8.8.8.8"
+                    "2606:4700:4700::1111", "2606:4700:4700::1001" -> "2001:4860:4860::8888"
+                    else -> dns
+                }
+            }.distinct()
+        } else {
+            rawParsedVpnDns
+        }
         if (usesInternalDns) {
             builder.addDnsServer(preset.routerDnsIp)
         } else if (parsedVpnDns.isNotEmpty()) {
@@ -409,8 +478,8 @@ class XrayVpnService : VpnService() {
                 runCatching { builder.addDnsServer(dns) }
             }
         } else {
-            builder.addDnsServer("1.1.1.1")
             builder.addDnsServer("8.8.8.8")
+            builder.addDnsServer("8.8.4.4")
         }
 
         if (settings.enableIpv6) {
@@ -419,7 +488,7 @@ class XrayVpnService : VpnService() {
                 // Use local TUN IPv6 router so Android Private DNS (port 853) does not probe external Cloudflare IPs
                 builder.addDnsServer("fd00:10:0:0::1")
             } else if (parsedVpnDns.none { it.contains(':') }) {
-                builder.addDnsServer("2606:4700:4700::1111")
+                builder.addDnsServer("2001:4860:4860::8888")
             }
         }
 
@@ -532,7 +601,11 @@ class XrayVpnService : VpnService() {
                 var uplink = 0L
                 var downlink = 0L
                 var directTotal = 0L
-                if (controller != null) {
+                if (amirProxy != null) {
+                    val (upDelta, downDelta) = amirProxy.consumeTrafficDelta()
+                    uplink = upDelta
+                    downlink = downDelta
+                } else if (controller != null) {
                     val rawStats = runCatching { controller.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
                     if (rawStats.isNotBlank()) {
                         rawStats.split(";").forEach { item ->
@@ -549,10 +622,6 @@ class XrayVpnService : VpnService() {
                             }
                         }
                     }
-                } else if (amirProxy != null) {
-                    val (upDelta, downDelta) = amirProxy.consumeTrafficDelta()
-                    uplink = upDelta
-                    downlink = downDelta
                 }
                 VpnStateHolder.updateTraffic(uplink, downlink)
                 if (speedDisplayEnabled) {
@@ -582,21 +651,21 @@ class XrayVpnService : VpnService() {
         serviceScope.launch {
             val controller = coreController
             val amirProxy = amirLocalProxy
-            if (controller == null || !controller.isRunning) {
-                if (amirProxy != null && amirProxy.isRunning()) {
-                    VpnStateHolder.setTestingDelay(true)
-                    val delayMs = runCatching {
-                        amirProxy.measureDelay(testUrl)
-                    }.getOrElse { err ->
-                        VpnStateHolder.appendLog("AMIR delay test failed: ${err.message}")
-                        -1L
-                    }
-                    VpnStateHolder.setLastTestedDelay(delayMs)
-                    VpnStateHolder.appendLog(
-                        if (delayMs >= 0) "AMIR direct connection test: ${delayMs} ms" else "AMIR direct connection test: timeout/error"
-                    )
-                    return@launch
+            if (amirProxy != null && amirProxy.isRunning()) {
+                VpnStateHolder.setTestingDelay(true)
+                val delayMs = runCatching {
+                    amirProxy.measureDelay(testUrl)
+                }.getOrElse { err ->
+                    VpnStateHolder.appendLog("AMIR delay test failed: ${err.message}")
+                    -1L
                 }
+                VpnStateHolder.setLastTestedDelay(delayMs)
+                VpnStateHolder.appendLog(
+                    if (delayMs >= 0) "AMIR connection test: ${delayMs} ms" else "AMIR connection test: timeout/error"
+                )
+                return@launch
+            }
+            if (controller == null || !controller.isRunning) {
                 VpnStateHolder.setLastTestedDelay(-1L)
                 return@launch
             }

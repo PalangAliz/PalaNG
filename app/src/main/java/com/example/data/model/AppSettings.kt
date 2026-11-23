@@ -175,13 +175,32 @@ data class AppSettings(
         }
 
         fun affectsActiveAmirProxy(old: AppSettings, new: AppSettings): Boolean {
-            return old.preferIpv6 != new.preferIpv6 ||
+            return old.vpnMode != new.vpnMode ||
+                old.enableIpv6 != new.enableIpv6 ||
+                old.preferIpv6 != new.preferIpv6 ||
+                old.localDnsEnabled != new.localDnsEnabled ||
+                old.fakeDnsEnabled != new.fakeDnsEnabled ||
+                old.vpnDns != new.vpnDns ||
+                old.appendHttpProxyToVpn != new.appendHttpProxyToVpn ||
+                old.bypassLan != new.bypassLan ||
+                old.vpnInterfaceAddress != new.vpnInterfaceAddress ||
+                old.vpnMtu != new.vpnMtu ||
+                old.perAppProxyEnabled != new.perAppProxyEnabled ||
+                old.perAppBypassMode != new.perAppBypassMode ||
+                old.perAppPackages != new.perAppPackages ||
+                old.sniffingEnabled != new.sniffingEnabled ||
+                old.routeOnly != new.routeOnly ||
+                old.localProxyEnabled != new.localProxyEnabled ||
                 old.allowLan != new.allowLan ||
                 old.dynamicProxyPortEnabled != new.dynamicProxyPortEnabled ||
                 old.socksPort != new.socksPort ||
                 old.httpPort != new.httpPort ||
                 old.localProxyUsername != new.localProxyUsername ||
                 old.localProxyPassword != new.localProxyPassword ||
+                old.remoteDns != new.remoteDns ||
+                old.dnsHosts != new.dnsHosts ||
+                old.routingMode != new.routingMode ||
+                old.domainStrategy != new.domainStrategy ||
                 old.logLevel != new.logLevel
         }
     }

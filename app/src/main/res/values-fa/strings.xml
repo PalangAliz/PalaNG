@@ -22,6 +22,7 @@
     <string name="selected_server">انتخاب‌شده: %1$s</string>
     <string name="no_server_selected">سروری انتخاب نشده است</string>
     <string name="amir_direct_apn_title">پراکسی مستقیم امیر (بدون تونل)</string>
+    <string name="amir_vpn_tun_title">VPN سراسری امیر (TUN + پراکسی)</string>
     <string name="amir_direct_apn_sub">پراکسی APN / HTTP:‏ %1$s:%2$d  •  SOCKS5:‏ :%3$d</string>
     <string name="amir_direct_copied">نشانی پراکسی %1$s:%2$d کپی شد</string>
 
@@ -182,7 +183,7 @@
     <string name="mode_proxy_only">فقط پراکسی (Proxy only)</string>
     <string name="pref_more_help_title">راهنمای بیشتر</string>
     <string name="pref_more_help_sub">توضیحات درباره Local DNS، FakeDNS، Fragment، Mux و هسته مجزای Amir</string>
-    <string name="help_dialog_body">• حالت VPN برای پروتکل‌های VLESS، VMess، Trojan، Shadowsocks، WireGuard و Hysteria2 از رابط بومی Go TUN هسته Xray استفاده می‌کند.\n\n• پروتکل AMIR کاملاً مستقل و مستقیم بدون هیچ تونل (TUN)، بدون Xray-core و بدون ماژول‌های DNS/مسیریابی اجرا می‌شود — درست مانند تنظیم مستقیم پراکسی در بخش Proxy تنظیمات APN (پورت HTTP/APN پیش‌فرض 10809 و SOCKS5 روی 10808 در نشانی 127.0.0.1).\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور و DNS را پیش از بالا آمدن تونل Xray ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، مسیریابی، پراکسی برنامه‌ها، Mux، Fragment و Observatory هنگام اتصال، به‌صورت خودکار با اتصال مجدد اعمال می‌شوند.</string>
+    <string name="help_dialog_body">• حالت VPN برای همه پروتکل‌ها (VLESS، VMess، Trojan، Shadowsocks، WireGuard، Hysteria2 و AMIR) کل ترافیک دستگاه را از طریق رابط بومی Go TUN تونل می‌کند.\n\n• در حالت VPN برای پروتکل AMIR، ترافیک TCP و DNS کل دستگاه با هسته داخلی امیر و بدون نیاز به فایل‌های اضافی هدایت می‌شود و هم‌زمان پورت‌های HTTP/APN و SOCKS5 نیز در دسترس‌اند. در حالت «فقط پراکسی»، AMIR بدون تونل (پورت 10809 برای HTTP/APN و 10808 برای SOCKS5 روی 127.0.0.1) اجرا می‌شود.\n\n• گزینه «ترجمه و افزودن به DNS Hosts» آدرس دامنه سرور و DNS را پیش از بالا آمدن تونل ترجمه می‌کند تا حلقه DNS رخ ندهد.\n\n• تغییرات تنظیمات هسته، VPN، مسیریابی، پراکسی برنامه‌ها، Mux، Fragment و Observatory هنگام اتصال، به‌صورت خودکار با اتصال مجدد اعمال می‌شوند.</string>
 
     <string name="about_title">درباره برنامه</string>
 </resources>

@@ -65,9 +65,7 @@ class XrayTileService : TileService() {
                 val app = application as XrayNgApplication
                 val settings = app.repository.getSettingsSnapshot()
                 val selectedId = settings.selectedServerId
-                val server = app.repository.getServerById(selectedId)
-                    ?: app.repository.getAllServers().firstOrNull()
-                val needsVpnConsent = settings.vpnMode && server?.protocol != com.example.data.model.ProtocolType.AMIR
+                val needsVpnConsent = settings.vpnMode
                 val prepareIntent = if (needsVpnConsent) VpnService.prepare(this@XrayTileService) else null
                 if (prepareIntent == null) {
                     XrayVpnService.start(this@XrayTileService, selectedId)

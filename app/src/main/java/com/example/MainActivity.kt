@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
                             val latestSettings = viewModel.settingsFlow.value
                             val state = viewModel.connectionState.value
                             val active = state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING
-                            val prepareIntent: Intent? = if (active && latestSettings.vpnMode && activeServer?.protocol != ProtocolType.AMIR) {
+                            val prepareIntent: Intent? = if (active && latestSettings.vpnMode) {
                                 VpnService.prepare(this)
                             } else {
                                 null
@@ -128,7 +128,7 @@ class MainActivity : ComponentActivity() {
                     val notificationPermLauncher = rememberLauncherForActivityResult(
                         contract = ActivityResultContracts.RequestPermission()
                     ) {
-                        val needsVpnConsent = settings.vpnMode && selectedServer?.protocol != ProtocolType.AMIR
+                        val needsVpnConsent = settings.vpnMode
                         val prepareIntent = if (needsVpnConsent) VpnService.prepare(this) else null
                         if (prepareIntent != null) {
                             vpnConsentLauncher.launch(prepareIntent)
@@ -148,7 +148,7 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
-                                val needsVpnConsent = settings.vpnMode && selectedServer?.protocol != ProtocolType.AMIR
+                                val needsVpnConsent = settings.vpnMode
                                 val prepareIntent: Intent? = if (needsVpnConsent) VpnService.prepare(this) else null
                                 if (prepareIntent != null) {
                                     vpnConsentLauncher.launch(prepareIntent)

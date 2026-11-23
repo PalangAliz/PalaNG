@@ -295,7 +295,8 @@ fun HomeScreen(
                                 color = if (isDark) PumpkinYellow else PumpkinYellowDeep
                             )
                             val drawerModeLabel = when {
-                                selectedServer?.protocol == ProtocolType.AMIR -> "DIRECT PROXY"
+                                selectedServer?.protocol == ProtocolType.AMIR && uiState.settings.vpnMode -> "AMIR · TUN"
+                                selectedServer?.protocol == ProtocolType.AMIR -> "AMIR · PROXY"
                                 uiState.settings.vpnMode -> "TUN"
                                 else -> "SOCKS"
                             }
@@ -487,7 +488,8 @@ fun HomeScreen(
                                             color = if (isDark) PumpkinYellow else PumpkinYellowDeep
                                         )
                                         val topModeLabel = when {
-                                            selectedServer?.protocol == ProtocolType.AMIR -> "DIRECT PROXY"
+                                            selectedServer?.protocol == ProtocolType.AMIR && uiState.settings.vpnMode -> "AMIR · TUN"
+                                            selectedServer?.protocol == ProtocolType.AMIR -> "AMIR · PROXY"
                                             uiState.settings.vpnMode -> "TUN"
                                             else -> "SOCKS"
                                         }
@@ -689,6 +691,7 @@ fun HomeScreen(
                     speedDisplayEnabled = uiState.settings.speedDisplayEnabled,
                     activeSocksPort = if (activeProxy.enabled && (uiState.settings.dynamicProxyPortEnabled || selectedServer?.protocol == ProtocolType.AMIR)) activeProxy.socksPort else null,
                     activeAmirProxy = if (selectedServer?.protocol == ProtocolType.AMIR && activeProxy.enabled) activeProxy else null,
+                    isVpnMode = uiState.settings.vpnMode,
                     allowLan = uiState.settings.allowLan,
                     uplinkBps = trafficStats.uplinkSpeedBps,
                     downlinkBps = trafficStats.downlinkSpeedBps,
@@ -887,6 +890,7 @@ private fun HeroConnectionCard(
     speedDisplayEnabled: Boolean,
     activeSocksPort: Int?,
     activeAmirProxy: com.example.service.ActiveRuntimeProxy?,
+    isVpnMode: Boolean,
     allowLan: Boolean,
     uplinkBps: Long,
     downlinkBps: Long,
@@ -1108,7 +1112,9 @@ private fun HeroConnectionCard(
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text(
-                                    text = stringResource(R.string.amir_direct_apn_title),
+                                    text = stringResource(
+                                        if (isVpnMode) R.string.amir_vpn_tun_title else R.string.amir_direct_apn_title
+                                    ),
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isDark) PumpkinYellow else PumpkinYellowDeep,
