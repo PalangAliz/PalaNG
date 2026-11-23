@@ -1829,4 +1829,214 @@ class ConfigParserTest {
         assertEquals("fakedns", amirPureFakeServers.getString(0))
         assertEquals("localhost", amirPureFakeServers.getString(1))
     }
+
+    @Test
+    fun `AmirLocalProxy direct APN HTTP CONNECT and plain HTTP forwarding work standalone on dual ports and track traffic`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
+        val wsServer = java.net.ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = wsServer.localPort
+        val observedTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+        val wsThread = Thread {
+            while (!wsServer.isClosed) {
+                val s = try {
+                    wsServer.accept()
+                } catch (_: Exception) {
+                    break
+                }
+                Thread {
+                    s.use { sock ->
+                        val inp = java.io.BufferedInputStream(sock.getInputStream())
+                        val out = sock.getOutputStream()
+                        var wsKey = ""
+                        while (true) {
+                            val sb = StringBuilder()
+                            while (true) {
+                                val c = inp.read()
+                                if (c < 0 || c == '\n'.code) break
+                                if (c != '\r'.code) sb.append(c.toChar())
+                            }
+                            val line = sb.toString()
+                            if (line.isEmpty()) break
+                            if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                                wsKey = line.substringAfter(':').trim()
+                            }
+                        }
+                        val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                            .digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII))
+                        val accept = android.util.Base64.encodeToString(sha1, android.util.Base64.NO_WRAP)
+                        out.write(
+                            (
+                                "HTTP/1.1 101 Switching Protocols\r\n" +
+                                    "Upgrade: websocket\r\n" +
+                                    "Connection: Upgrade\r\n" +
+                                    "Sec-WebSocket-Accept: $accept\r\n" +
+                                    "Sec-WebSocket-Protocol: chat.v2\r\n\r\n"
+                                ).toByteArray(Charsets.US_ASCII)
+                        )
+                        out.flush()
+
+                        fun readWsFrame(): Pair<Int, ByteArray> {
+                            val b0 = inp.read()
+                            if (b0 < 0) return -1 to ByteArray(0)
+                            val b1 = inp.read()
+                            if (b1 < 0) return -1 to ByteArray(0)
+                            val opcode = b0 and 0x0F
+                            val masked = (b1 and 0x80) != 0
+                            val lenByte = b1 and 0x7F
+                            val len = when (lenByte) {
+                                126 -> {
+                                    val hi = inp.read()
+                                    val lo = inp.read()
+                                    (hi shl 8) or lo
+                                }
+                                else -> lenByte
+                            }
+                            val mask = if (masked) ByteArray(4).also { java.io.DataInputStream(inp).readFully(it) } else null
+                            val data = ByteArray(len).also { java.io.DataInputStream(inp).readFully(it) }
+                            if (mask != null) {
+                                for (i in data.indices) data[i] = (data[i].toInt() xor mask[i and 3].toInt()).toByte()
+                            }
+                            return opcode to data
+                        }
+
+                        val (_, init) = readWsFrame()
+                        val nonce = init.copyOfRange(0, 16)
+                        val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, nonce)
+                        val body = com.example.core.AmirLocalProxy.xorBytes(init.copyOfRange(16, init.size - 8), key)
+                        val port = ((body[1].toInt() and 0xFF) shl 8) or (body[2].toInt() and 0xFF)
+                        val atyp = body[3].toInt() and 0xFF
+                        val host = if (atyp == 2) {
+                            val dLen = body[4].toInt() and 0xFF
+                            String(body, 5, dLen, Charsets.UTF_8)
+                        } else {
+                            "ip"
+                        }
+                        observedTargets.add("$host:$port")
+
+                        val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                            .copyOfRange(0, 16)
+                        val encAck = com.example.core.AmirLocalProxy.xorBytes(expectedAck, key)
+                        out.write(0x82)
+                        out.write(encAck.size)
+                        out.write(encAck)
+                        out.flush()
+
+                        val (_, reqFrame) = readWsFrame()
+                        val reqText = String(com.example.core.AmirLocalProxy.xorBytes(reqFrame, key), Charsets.US_ASCII)
+                        val responseBody = if (port == 443) {
+                            "TLS_TUNNEL_ECHO:$reqText"
+                        } else {
+                            "HTTP/1.1 200 OK\r\nContent-Length: ${reqText.length}\r\nConnection: close\r\n\r\n$reqText"
+                        }
+                        val respBytes = responseBody.toByteArray(Charsets.US_ASCII)
+                        val encResp = com.example.core.AmirLocalProxy.xorBytes(respBytes, key)
+                        out.write(0x82)
+                        if (encResp.size <= 125) {
+                            out.write(encResp.size)
+                        } else {
+                            out.write(126)
+                            out.write((encResp.size ushr 8) and 0xFF)
+                            out.write(encResp.size and 0xFF)
+                        }
+                        out.write(encResp)
+                        out.write(byteArrayOf(0x88.toByte(), 0x00))
+                        out.flush()
+                    }
+                }.start()
+            }
+        }
+        wsThread.isDaemon = true
+        wsThread.start()
+
+        // Allocate two distinct ephemeral preferred ports (HTTP + SOCKS5)
+        val probeHttp = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        val prefHttp = probeHttp.localPort
+        probeHttp.close()
+        val probeSocks = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+        val prefSocks = probeSocks.localPort
+        probeSocks.close()
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "DirectApnAmir",
+            protocol = ProtocolType.AMIR,
+            address = "127.0.0.1",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "ws://127.0.0.1:$wsPort/",
+            extraParam2 = ""
+        )
+        val proxy = com.example.core.AmirLocalProxy(cfg)
+        val (boundHttpPort, boundSocksPort) = proxy.startDual(
+            httpPreferredPort = prefHttp,
+            socksPreferredPort = prefSocks,
+            listenHost = "127.0.0.1"
+        )
+        try {
+            assertEquals(prefHttp, boundHttpPort)
+            assertEquals(prefSocks, boundSocksPort)
+            assertTrue(proxy.isRunning())
+
+            // 1. HTTPS CONNECT on HTTP port (with pipelined payload right after headers!)
+            java.net.Socket("127.0.0.1", boundHttpPort).use { sock ->
+                sock.soTimeout = 5000
+                val out = sock.getOutputStream()
+                out.write(
+                    (
+                        "CONNECT youtube.com:443 HTTP/1.1\r\n" +
+                            "Host: youtube.com:443\r\n" +
+                            "Proxy-Connection: keep-alive\r\n\r\n" +
+                            "CLIENT_HELLO_PING"
+                        ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+                val rawResp = String(sock.getInputStream().readBytes(), Charsets.US_ASCII)
+                assertTrue(rawResp.startsWith("HTTP/1.1 200 Connection Established"))
+                assertTrue(rawResp.contains("TLS_TUNNEL_ECHO:CLIENT_HELLO_PING"))
+            }
+
+            // 2. Plain HTTP proxy GET with Proxy-Connection stripping on HTTP port
+            java.net.Socket("127.0.0.1", boundHttpPort).use { sock ->
+                sock.soTimeout = 5000
+                val out = sock.getOutputStream()
+                out.write(
+                    (
+                        "GET http://api.ip.sb/geoip?lang=en HTTP/1.1\r\n" +
+                            "Host: api.ip.sb\r\n" +
+                            "Proxy-Connection: keep-alive\r\n" +
+                            "User-Agent: TestClient\r\n\r\n"
+                        ).toByteArray(Charsets.US_ASCII)
+                )
+                out.flush()
+                val rawResp = String(sock.getInputStream().readBytes(), Charsets.US_ASCII)
+                assertTrue(rawResp.startsWith("HTTP/1.1 200 OK"))
+                assertTrue(rawResp.contains("GET /geoip?lang=en HTTP/1.1"))
+                assertTrue(rawResp.contains("Connection: close"))
+                assertFalse(rawResp.contains("Proxy-Connection"))
+            }
+
+            // 3. Auto-detection: HTTP CONNECT also works if client sends HTTP to the SOCKS5 port!
+            java.net.Socket("127.0.0.1", boundSocksPort).use { sock ->
+                sock.soTimeout = 5000
+                val out = sock.getOutputStream()
+                out.write("CONNECT google.com:443 HTTP/1.1\r\nHost: google.com:443\r\n\r\nHI".toByteArray())
+                out.flush()
+                val rawResp = String(sock.getInputStream().readBytes(), Charsets.US_ASCII)
+                assertTrue(rawResp.startsWith("HTTP/1.1 200 Connection Established"))
+                assertTrue(rawResp.contains("TLS_TUNNEL_ECHO:HI"))
+            }
+
+            assertTrue(observedTargets.contains("youtube.com:443"))
+            assertTrue(observedTargets.contains("api.ip.sb:80"))
+            assertTrue(observedTargets.contains("google.com:443"))
+
+            val (upBytes, downBytes) = proxy.consumeTrafficDelta()
+            assertTrue("Expected positive uplink bytes, got $upBytes", upBytes > 0L)
+            assertTrue("Expected positive downlink bytes, got $downBytes", downBytes > 0L)
+        } finally {
+            proxy.stop()
+            wsServer.close()
+        }
+    }
 }

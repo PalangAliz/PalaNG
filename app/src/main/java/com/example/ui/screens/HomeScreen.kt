@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AltRoute
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -293,8 +294,13 @@ fun HomeScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = if (isDark) PumpkinYellow else PumpkinYellowDeep
                             )
+                            val drawerModeLabel = when {
+                                selectedServer?.protocol == ProtocolType.AMIR -> "DIRECT PROXY"
+                                uiState.settings.vpnMode -> "TUN"
+                                else -> "SOCKS"
+                            }
                             Text(
-                                text = "v${BuildConfig.VERSION_NAME} · ${if (uiState.settings.vpnMode) "TUN" else "SOCKS"}",
+                                text = "v${BuildConfig.VERSION_NAME} · $drawerModeLabel",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -480,8 +486,13 @@ fun HomeScreen(
                                             fontWeight = FontWeight.Bold,
                                             color = if (isDark) PumpkinYellow else PumpkinYellowDeep
                                         )
+                                        val topModeLabel = when {
+                                            selectedServer?.protocol == ProtocolType.AMIR -> "DIRECT PROXY"
+                                            uiState.settings.vpnMode -> "TUN"
+                                            else -> "SOCKS"
+                                        }
                                         Text(
-                                            text = "· ${if (uiState.settings.vpnMode) "TUN" else "SOCKS"}",
+                                            text = "· $topModeLabel",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -676,7 +687,9 @@ fun HomeScreen(
                     connectionState = uiState.connectionState,
                     selectedServer = selectedServer,
                     speedDisplayEnabled = uiState.settings.speedDisplayEnabled,
-                    activeSocksPort = if (activeProxy.enabled && uiState.settings.dynamicProxyPortEnabled) activeProxy.socksPort else null,
+                    activeSocksPort = if (activeProxy.enabled && (uiState.settings.dynamicProxyPortEnabled || selectedServer?.protocol == ProtocolType.AMIR)) activeProxy.socksPort else null,
+                    activeAmirProxy = if (selectedServer?.protocol == ProtocolType.AMIR && activeProxy.enabled) activeProxy else null,
+                    allowLan = uiState.settings.allowLan,
                     uplinkBps = trafficStats.uplinkSpeedBps,
                     downlinkBps = trafficStats.downlinkSpeedBps,
                     totalUpload = trafficStats.totalUploadBytes,
@@ -686,6 +699,12 @@ fun HomeScreen(
                     onTapStatusTest = {
                         if (uiState.connectionState == ConnectionState.CONNECTED) {
                             viewModel.measureConnectedDelay()
+                        }
+                    },
+                    onCopyDirectProxy = { host, port ->
+                        viewModel.copyToClipboard("AMIR Proxy", "$host:$port")
+                        scope.launch {
+                            snackbarHostState.showSnackbar(context.getString(R.string.amir_direct_copied, host, port))
                         }
                     },
                     onTestConnectionInfo = { viewModel.testCurrentConnectionInfo() },
@@ -867,6 +886,8 @@ private fun HeroConnectionCard(
     selectedServer: ServerConfig?,
     speedDisplayEnabled: Boolean,
     activeSocksPort: Int?,
+    activeAmirProxy: com.example.service.ActiveRuntimeProxy?,
+    allowLan: Boolean,
     uplinkBps: Long,
     downlinkBps: Long,
     totalUpload: Long,
@@ -874,6 +895,7 @@ private fun HeroConnectionCard(
     lastTestedDelay: Long?,
     isTestingDelay: Boolean,
     onTapStatusTest: () -> Unit,
+    onCopyDirectProxy: (host: String, port: Int) -> Unit,
     onTestConnectionInfo: () -> Unit,
     onToggleConnect: () -> Unit,
     modifier: Modifier = Modifier
@@ -1059,6 +1081,59 @@ private fun HeroConnectionCard(
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = isConnected && activeAmirProxy != null) {
+                activeAmirProxy?.let { amirProxy ->
+                    val proxyHost = if (allowLan) "0.0.0.0" else "127.0.0.1"
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        HorizontalDivider(
+                            thickness = 0.6.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onCopyDirectProxy("127.0.0.1", amirProxy.httpPort) }
+                                .padding(horizontal = 16.dp, vertical = 9.dp)
+                                .testTag("amir_direct_proxy_banner"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.amir_direct_apn_title),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isDark) PumpkinYellow else PumpkinYellowDeep,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = stringResource(
+                                        R.string.amir_direct_apn_sub,
+                                        proxyHost,
+                                        amirProxy.httpPort,
+                                        amirProxy.socksPort
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Outlined.ContentCopy,
+                                contentDescription = "Copy direct proxy endpoint",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }

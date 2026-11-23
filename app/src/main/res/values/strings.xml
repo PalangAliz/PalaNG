@@ -21,6 +21,9 @@
     <string name="connected_timeout">Connected • Test timeout</string>
     <string name="selected_server">Selected: %1$s</string>
     <string name="no_server_selected">No server selected</string>
+    <string name="amir_direct_apn_title">AMIR Direct Proxy (No Tunnel)</string>
+    <string name="amir_direct_apn_sub">APN / HTTP: %1$s:%2$d  •  SOCKS5: :%3$d</string>
+    <string name="amir_direct_copied">Copied proxy address %1$s:%2$d</string>
 
     <string name="action_add">Add configuration</string>
     <string name="action_import_clipboard">Import config from clipboard</string>
@@ -179,7 +182,7 @@
     <string name="mode_proxy_only">Proxy only</string>
     <string name="pref_more_help_title">Click me for more help</string>
     <string name="pref_more_help_sub">Notes about Local DNS, FakeDNS, Fragment, Mux &amp; standalone Amir core</string>
-    <string name="help_dialog_body">• VPN Mode uses Xray-core native Go TUN (no root or external TUN daemon needed).\n\n• AMIR profiles run in an isolated standalone core whose local SOCKS5 proxy feeds directly into Xray-core; amir:// URIs configure AMIR\'s own UUID, Worker URL, and Clean IP variables without Xray altering AMIR\'s transport.\n\n• Outbound domain resolution \"Resolve and add to DNS Hosts\" resolves your proxy server hostname and DoH endpoints before tunnel startup to avoid DNS bootstrap loops.\n\n• Changes to Core, VPN, Routing, Per-App, Mux, Fragment, or Observatory settings apply automatically when returning from settings while connected.</string>
+    <string name="help_dialog_body">• VPN Mode uses Xray-core native Go TUN (no root or external TUN daemon needed) for VLESS, VMess, Trojan, Shadowsocks, WireGuard, and Hysteria2.\n\n• AMIR profiles run completely standalone and directly without Xray-core, TUN, FakeDNS, or routing modules—just like an APN or Wi-Fi HTTP/SOCKS5 proxy (127.0.0.1:10809 for APN/HTTP and 127.0.0.1:10808 for SOCKS5).\n\n• Outbound domain resolution \"Resolve and add to DNS Hosts\" resolves your Xray proxy server hostname and DoH endpoints before tunnel startup to avoid DNS bootstrap loops.\n\n• Changes to Core, VPN, Routing, Per-App, Mux, Fragment, or Observatory settings apply automatically when returning from settings while connected.</string>
 
     <string name="about_title">About</string>
 </resources>

@@ -61,26 +61,30 @@ class XrayTileService : TileService() {
         if (state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING) {
             XrayVpnService.stop(this)
         } else {
-            val prepareIntent = VpnService.prepare(this)
-            if (prepareIntent == null) {
-                scope.launch {
-                    val app = application as XrayNgApplication
-                    val selectedId = app.repository.getSettingsSnapshot().selectedServerId
+            scope.launch {
+                val app = application as XrayNgApplication
+                val settings = app.repository.getSettingsSnapshot()
+                val selectedId = settings.selectedServerId
+                val server = app.repository.getServerById(selectedId)
+                    ?: app.repository.getAllServers().firstOrNull()
+                val needsVpnConsent = settings.vpnMode && server?.protocol != com.example.data.model.ProtocolType.AMIR
+                val prepareIntent = if (needsVpnConsent) VpnService.prepare(this@XrayTileService) else null
+                if (prepareIntent == null) {
                     XrayVpnService.start(this@XrayTileService, selectedId)
-                }
-            } else {
-                // Need user VPN consent inside MainActivity
-                val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-                if (launchIntent != null) {
-                    launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        val pi = android.app.PendingIntent.getActivity(
-                            this, 0, launchIntent, android.app.PendingIntent.FLAG_IMMUTABLE
-                        )
-                        startActivityAndCollapse(pi)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        startActivityAndCollapse(launchIntent)
+                } else {
+                    // Need user VPN consent inside MainActivity
+                    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                    if (launchIntent != null) {
+                        launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            val pi = android.app.PendingIntent.getActivity(
+                                this@XrayTileService, 0, launchIntent, android.app.PendingIntent.FLAG_IMMUTABLE
+                            )
+                            startActivityAndCollapse(pi)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            startActivityAndCollapse(launchIntent)
+                        }
                     }
                 }
             }

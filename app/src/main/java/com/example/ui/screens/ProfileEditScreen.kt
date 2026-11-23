@@ -248,7 +248,7 @@ fun ProfileEditScreen(
                         .testTag("edit_amir_uuid")
                 )
                 Text(
-                    text = "These variables configure the standalone AMIR core (Worker WSS & Clean IP). Its local SOCKS5 output feeds directly into Xray-core without altering the AMIR transport.",
+                    text = "These variables configure the standalone AMIR direct proxy (Worker WSS & Clean IP). Connects directly without Xray-core, TUN, or DNS modules — works as a direct HTTP/APN Proxy and SOCKS5 endpoint.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

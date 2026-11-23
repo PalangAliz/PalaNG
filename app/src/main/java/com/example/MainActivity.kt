@@ -27,6 +27,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.data.model.LanguageMode
+import com.example.data.model.ProtocolType
 import com.example.service.ConnectionState
 import com.example.ui.MainViewModel
 import com.example.ui.components.PalangBackdrop
@@ -53,6 +54,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val settings by viewModel.settingsFlow.collectAsStateWithLifecycle()
+            val uiState by viewModel.homeUiState.collectAsStateWithLifecycle()
             val baseContext = LocalContext.current
             val baseConfig = LocalConfiguration.current
 
@@ -81,6 +83,13 @@ class MainActivity : ComponentActivity() {
                     dynamicColor = settings.dynamicColorEnabled
                 ) {
                     val navController = rememberNavController()
+                    val selectedServer = remember(uiState.servers, settings.selectedServerId) {
+                        uiState.servers.firstOrNull { it.id == settings.selectedServerId }
+                            ?: uiState.servers.firstOrNull()
+                    }
+                    val activeServer = remember(uiState.servers, uiState.activeServerId, selectedServer) {
+                        uiState.servers.firstOrNull { it.id == uiState.activeServerId } ?: selectedServer
+                    }
 
                     val vpnConsentLauncher = rememberLauncherForActivityResult(
                         contract = ActivityResultContracts.StartActivityForResult()
@@ -103,7 +112,7 @@ class MainActivity : ComponentActivity() {
                             val latestSettings = viewModel.settingsFlow.value
                             val state = viewModel.connectionState.value
                             val active = state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING
-                            val prepareIntent: Intent? = if (active && latestSettings.vpnMode) {
+                            val prepareIntent: Intent? = if (active && latestSettings.vpnMode && activeServer?.protocol != ProtocolType.AMIR) {
                                 VpnService.prepare(this)
                             } else {
                                 null
@@ -119,7 +128,8 @@ class MainActivity : ComponentActivity() {
                     val notificationPermLauncher = rememberLauncherForActivityResult(
                         contract = ActivityResultContracts.RequestPermission()
                     ) {
-                        val prepareIntent = if (settings.vpnMode) VpnService.prepare(this) else null
+                        val needsVpnConsent = settings.vpnMode && selectedServer?.protocol != ProtocolType.AMIR
+                        val prepareIntent = if (needsVpnConsent) VpnService.prepare(this) else null
                         if (prepareIntent != null) {
                             vpnConsentLauncher.launch(prepareIntent)
                         } else {
@@ -138,7 +148,8 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
-                                val prepareIntent: Intent? = if (settings.vpnMode) VpnService.prepare(this) else null
+                                val needsVpnConsent = settings.vpnMode && selectedServer?.protocol != ProtocolType.AMIR
+                                val prepareIntent: Intent? = if (needsVpnConsent) VpnService.prepare(this) else null
                                 if (prepareIntent != null) {
                                     vpnConsentLauncher.launch(prepareIntent)
                                 } else {

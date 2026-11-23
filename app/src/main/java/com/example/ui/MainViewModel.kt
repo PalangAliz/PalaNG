@@ -491,7 +491,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun testSingleServerDelay(server: ServerConfig) {
         viewModelScope.launch(Dispatchers.IO) {
-            AssetHelper.ensureCoreAssets(app)
+            if (server.protocol != ProtocolType.AMIR) {
+                AssetHelper.ensureCoreAssets(app)
+            }
             val settings = repository.getSettingsSnapshot()
             val delayMs = measureServerDelayInternal(server, settings)
             repository.updateLatency(server.id, delayMs)
@@ -501,10 +503,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun measureServerDelayInternal(server: ServerConfig, settings: AppSettings): Long {
         if (server.protocol == ProtocolType.AMIR) {
             val proxy = AmirLocalProxy(serverConfig = server, settings = settings)
-            val localPort = runCatching { proxy.start() }.getOrElse { return -1L }
             return try {
-                val configJson = XrayConfigBuilder.buildOutboundDelayTestJson(server, settings, amirLocalPort = localPort)
-                AssetHelper.measureOutboundDelay(app, configJson, settings.delayTestUrl)
+                proxy.measureDelay(settings.delayTestUrl)
             } finally {
                 runCatching { proxy.stop() }
             }
@@ -526,7 +526,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         batchTestJob = viewModelScope.launch(Dispatchers.IO) {
-            AssetHelper.ensureCoreAssets(app)
+            if (targets.any { it.protocol != ProtocolType.AMIR }) {
+                AssetHelper.ensureCoreAssets(app)
+            }
             _isTestingBatch.value = true
             _batchProgress.value = 0 to targets.size
             val settings = repository.getSettingsSnapshot()
@@ -622,9 +624,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch {
             var tunnelChanged = false
+            val activeId = VpnStateHolder.activeServerId.value
+            val activeIsAmir = activeId.isNotBlank() && repository.getServerById(activeId)?.protocol == ProtocolType.AMIR
             repository.updateSettings { current ->
                 val updated = transform(current)
-                tunnelChanged = AppSettings.affectsActiveTunnel(current, updated)
+                tunnelChanged = if (activeIsAmir) {
+                    AppSettings.affectsActiveAmirProxy(current, updated)
+                } else {
+                    AppSettings.affectsActiveTunnel(current, updated)
+                }
                 updated
             }
             if (tunnelChanged && isTunnelActive()) {

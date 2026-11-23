@@ -56,7 +56,6 @@ class XrayVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        AssetHelper.ensureCoreAssets(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -120,6 +119,52 @@ class XrayVpnService : VpnService() {
             startAsForeground(buildNotification("Connecting to ${server.remarks}…"))
 
             runCatching {
+                if (server.protocol == ProtocolType.AMIR) {
+                    val listenHost = if (settings.allowLan) "0.0.0.0" else "127.0.0.1"
+                    val runtimeSocksPort: Int
+                    val runtimeHttpPort: Int
+                    if (settings.dynamicProxyPortEnabled) {
+                        runtimeSocksPort = allocateFreePort(fallback = settings.socksPort)
+                        runtimeHttpPort = allocateFreePort(fallback = settings.httpPort, excludePorts = setOf(runtimeSocksPort))
+                        VpnStateHolder.appendLog("Dynamic AMIR proxy ports allocated: HTTP=$runtimeHttpPort, SOCKS=$runtimeSocksPort")
+                    } else {
+                        runtimeSocksPort = settings.socksPort
+                        runtimeHttpPort = settings.httpPort
+                    }
+
+                    val proxy = AmirLocalProxy(
+                        serverConfig = server,
+                        settings = settings,
+                        protectSocket = { true },
+                        onLog = { msg -> VpnStateHolder.appendLog(msg) }
+                    )
+                    amirLocalProxy = proxy
+                    val (boundHttpPort, boundSocksPort) = proxy.startDual(
+                        httpPreferredPort = runtimeHttpPort,
+                        socksPreferredPort = runtimeSocksPort,
+                        listenHost = listenHost
+                    )
+
+                    VpnStateHolder.setActiveProxy(
+                        ActiveRuntimeProxy(
+                            enabled = true,
+                            socksPort = boundSocksPort,
+                            httpPort = boundHttpPort,
+                            username = settings.localProxyUsername,
+                            password = settings.localProxyPassword
+                        )
+                    )
+
+                    VpnStateHolder.appendLog(
+                        "AMIR Direct Proxy active (no TUN, no Xray-core) • HTTP/APN: $listenHost:$boundHttpPort | SOCKS5: $listenHost:$boundSocksPort"
+                    )
+                    VpnStateHolder.setState(ConnectionState.CONNECTED, server.id, server.remarks)
+                    updateNotification("AMIR Proxy • HTTP/APN:$boundHttpPort | SOCKS:$boundSocksPort")
+                    startTrafficMonitor(app)
+                    return@runCatching
+                }
+
+                AssetHelper.ensureCoreAssets(this@XrayVpnService)
                 val rules = app.repository.getRoutingRules()
 
                 // Resolve outbound server & DoH hostnames before VPN interface starts
@@ -138,20 +183,6 @@ class XrayVpnService : VpnService() {
                     runtimeHttpPort = settings.httpPort
                 }
 
-                val amirPort = if (server.protocol == ProtocolType.AMIR) {
-                    val proxy = AmirLocalProxy(
-                        serverConfig = server,
-                        settings = settings,
-                        resolvedHosts = resolvedHosts,
-                        protectSocket = { sock -> protect(sock) },
-                        onLog = { msg -> VpnStateHolder.appendLog(msg) }
-                    )
-                    amirLocalProxy = proxy
-                    proxy.start(preferredPort = AmirLocalProxy.DEFAULT_SOCKS_PORT)
-                } else {
-                    0
-                }
-
                 VpnStateHolder.setActiveProxy(
                     ActiveRuntimeProxy(
                         enabled = effectiveLocalProxy,
@@ -166,7 +197,7 @@ class XrayVpnService : VpnService() {
                     server = server,
                     settings = settings,
                     customRules = rules,
-                    amirLocalPort = amirPort,
+                    amirLocalPort = 0,
                     resolvedServerHosts = resolvedHosts,
                     runtimeSocksPort = runtimeSocksPort,
                     runtimeHttpPort = runtimeHttpPort
@@ -219,7 +250,7 @@ class XrayVpnService : VpnService() {
                 startTrafficMonitor(app)
             }.onFailure { err ->
                 VpnStateHolder.appendLog("Start error: ${err.message}")
-                VpnStateHolder.setError(err.message ?: "Failed to start Xray core")
+                VpnStateHolder.setError(err.message ?: "Failed to start proxy service")
                 stopVpnInternal()
                 stopSelf()
             }
@@ -493,35 +524,54 @@ class XrayVpnService : VpnService() {
             var lastSpeedEnabled = true
             while (isActive && VpnStateHolder.connectionState.value == ConnectionState.CONNECTED) {
                 delay(1000L)
-                val controller = coreController ?: break
+                val controller = coreController
+                val amirProxy = amirLocalProxy
+                if (controller == null && (amirProxy == null || !amirProxy.isRunning())) break
                 val speedDisplayEnabled = runCatching { app.repository.getSettingsSnapshot().speedDisplayEnabled }
                     .getOrDefault(lastSpeedEnabled)
-                val rawStats = runCatching { controller.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
                 var uplink = 0L
                 var downlink = 0L
                 var directTotal = 0L
-                if (rawStats.isNotBlank()) {
-                    rawStats.split(";").forEach { item ->
-                        val parts = item.split(",")
-                        if (parts.size == 3) {
-                            val value = parts[2].toLongOrNull() ?: 0L
-                            when (parts[0]) {
-                                "proxy" -> when (parts[1]) {
-                                    "uplink" -> uplink += value
-                                    "downlink" -> downlink += value
+                if (controller != null) {
+                    val rawStats = runCatching { controller.queryAllOutboundTrafficStats() }.getOrNull().orEmpty()
+                    if (rawStats.isNotBlank()) {
+                        rawStats.split(";").forEach { item ->
+                            val parts = item.split(",")
+                            if (parts.size == 3) {
+                                val value = parts[2].toLongOrNull() ?: 0L
+                                when (parts[0]) {
+                                    "proxy" -> when (parts[1]) {
+                                        "uplink" -> uplink += value
+                                        "downlink" -> downlink += value
+                                    }
+                                    "direct" -> directTotal += value
                                 }
-                                "direct" -> directTotal += value
                             }
                         }
                     }
+                } else if (amirProxy != null) {
+                    val (upDelta, downDelta) = amirProxy.consumeTrafficDelta()
+                    uplink = upDelta
+                    downlink = downDelta
                 }
                 VpnStateHolder.updateTraffic(uplink, downlink)
                 if (speedDisplayEnabled) {
-                    val dominantTag = if (directTotal > uplink + downlink) "Direct" else "Proxy"
+                    val dominantTag = when {
+                        controller == null -> "Direct"
+                        directTotal > uplink + downlink -> "Direct"
+                        else -> "Proxy"
+                    }
                     val speedText = "↑ ${formatSpeed(uplink)} | ↓ ${formatSpeed(downlink)} ($dominantTag)"
                     updateNotification("$currentServerRemarks • $speedText")
                 } else if (lastSpeedEnabled) {
-                    updateNotification("Connected: $currentServerRemarks")
+                    updateNotification(
+                        if (controller == null) {
+                            val activeProxy = VpnStateHolder.activeProxy.value
+                            "AMIR Proxy • HTTP/APN:${activeProxy.httpPort} | SOCKS:${activeProxy.socksPort}"
+                        } else {
+                            "Connected: $currentServerRemarks"
+                        }
+                    )
                 }
                 lastSpeedEnabled = speedDisplayEnabled
             }
@@ -531,7 +581,22 @@ class XrayVpnService : VpnService() {
     private fun measureActiveDelay(testUrl: String) {
         serviceScope.launch {
             val controller = coreController
+            val amirProxy = amirLocalProxy
             if (controller == null || !controller.isRunning) {
+                if (amirProxy != null && amirProxy.isRunning()) {
+                    VpnStateHolder.setTestingDelay(true)
+                    val delayMs = runCatching {
+                        amirProxy.measureDelay(testUrl)
+                    }.getOrElse { err ->
+                        VpnStateHolder.appendLog("AMIR delay test failed: ${err.message}")
+                        -1L
+                    }
+                    VpnStateHolder.setLastTestedDelay(delayMs)
+                    VpnStateHolder.appendLog(
+                        if (delayMs >= 0) "AMIR direct connection test: ${delayMs} ms" else "AMIR direct connection test: timeout/error"
+                    )
+                    return@launch
+                }
                 VpnStateHolder.setLastTestedDelay(-1L)
                 return@launch
             }

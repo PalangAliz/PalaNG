@@ -173,5 +173,16 @@ data class AppSettings(
                 old.burstObservatoryTimeout != new.burstObservatoryTimeout ||
                 (new.observatoryMode != OBSERVATORY_NONE && old.delayTestUrl != new.delayTestUrl)
         }
+
+        fun affectsActiveAmirProxy(old: AppSettings, new: AppSettings): Boolean {
+            return old.preferIpv6 != new.preferIpv6 ||
+                old.allowLan != new.allowLan ||
+                old.dynamicProxyPortEnabled != new.dynamicProxyPortEnabled ||
+                old.socksPort != new.socksPort ||
+                old.httpPort != new.httpPort ||
+                old.localProxyUsername != new.localProxyUsername ||
+                old.localProxyPassword != new.localProxyPassword ||
+                old.logLevel != new.logLevel
+        }
     }
 }

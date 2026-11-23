@@ -59,7 +59,9 @@ class AmirLocalProxy(
     private val directDohFailureCount = AtomicInteger(0)
     private val directDohCooldownUntilMs = AtomicLong(0L)
     private val lastErrorLogMs = AtomicLong(0L)
-    private val parsedDnsHosts = XrayConfigBuilder.parseDnsHosts(settings.dnsHosts)
+    private val uplinkBytesCounter = AtomicLong(0L)
+    private val downlinkBytesCounter = AtomicLong(0L)
+    private val customHostOverrides = parseHostOverrides(settings.dnsHosts)
 
     private data class PooledWsConnection(
         val conn: DirectWsConnection,
@@ -86,8 +88,25 @@ class AmirLocalProxy(
     @Volatile
     private var serverSocket: ServerSocket? = null
 
+    @Volatile
+    private var httpServerSocket: ServerSocket? = null
+
     val localPort: Int
         get() = serverSocket?.localPort ?: 0
+
+    val localSocksPort: Int
+        get() = serverSocket?.localPort ?: 0
+
+    val localHttpPort: Int
+        get() = httpServerSocket?.localPort ?: localSocksPort
+
+    fun isRunning(): Boolean = running.get()
+
+    fun consumeTrafficDelta(): Pair<Long, Long> {
+        val up = uplinkBytesCounter.getAndSet(0L)
+        val down = downlinkBytesCounter.getAndSet(0L)
+        return up to down
+    }
 
     private val workerUrl: String = ConfigParser.normalizeAmirWorkerUrl(
         serverConfig.extraParam1.ifBlank { serverConfig.address }
@@ -119,27 +138,38 @@ class AmirLocalProxy(
     private val cleanIp: String = serverConfig.extraParam2.trim().removePrefix("[").removeSuffix("]")
     private val uuidBytes: ByteArray = serverConfig.passwordOrId.trim().toByteArray(StandardCharsets.UTF_8)
 
-    private val enableWarmPool: Boolean = !isLoopbackTarget(workerHost, parsedDnsHosts, resolvedHosts)
+    private val enableWarmPool: Boolean = !isLoopbackTarget(workerHost, customHostOverrides, resolvedHosts)
 
     fun start(preferredPort: Int = 0): Int {
-        val loopback = InetAddress.getByName("127.0.0.1")
-        val ss = if (preferredPort in 1024..65535) {
-            runCatching {
-                ServerSocket().apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(loopback, preferredPort), 1024)
-                }
-            }.getOrElse {
-                ServerSocket(0, 1024, loopback)
-            }
+        return startDual(
+            httpPreferredPort = preferredPort,
+            socksPreferredPort = preferredPort,
+            listenHost = "127.0.0.1"
+        ).second
+    }
+
+    fun startDual(
+        httpPreferredPort: Int = 10809,
+        socksPreferredPort: Int = 10808,
+        listenHost: String = "127.0.0.1"
+    ): Pair<Int, Int> {
+        val bindAddr = InetAddress.getByName(listenHost.ifBlank { "127.0.0.1" })
+        val socksSs = bindServerSocket(bindAddr, socksPreferredPort)
+        serverSocket = socksSs
+
+        val separateHttp = httpPreferredPort != socksPreferredPort || socksPreferredPort == 0
+        val httpSs = if (separateHttp && httpPreferredPort > 0) {
+            bindServerSocket(bindAddr, httpPreferredPort, excludePort = socksSs.localPort)
         } else {
-            ServerSocket(0, 1024, loopback)
+            null
         }
-        serverSocket = ss
+        httpServerSocket = httpSs
+
         running.set(true)
-        val boundPort = ss.localPort
+        val boundSocksPort = socksSs.localPort
+        val boundHttpPort = httpSs?.localPort ?: boundSocksPort
         emitInfo(
-            "Amir standalone core SOCKS5 output listening on 127.0.0.1:$boundPort -> $workerHost" +
+            "AMIR direct proxy listening on $listenHost (HTTP/APN:$boundHttpPort, SOCKS5:$boundSocksPort) -> $workerHost" +
                 (if (cleanIp.isNotBlank()) " (CF Clean IP: $cleanIp)" else "")
         )
 
@@ -148,23 +178,49 @@ class AmirLocalProxy(
             scheduleWarmPoolRefill(targetCount = INITIAL_WARM_POOL_SIZE)
         }
 
+        acceptLoop(socksSs)
+        if (httpSs != null) {
+            acceptLoop(httpSs)
+        }
+        return boundHttpPort to boundSocksPort
+    }
+
+    private fun bindServerSocket(
+        bindAddr: InetAddress,
+        preferredPort: Int,
+        excludePort: Int = -1
+    ): ServerSocket {
+        if (preferredPort in 1024..65535 && preferredPort != excludePort) {
+            val preferred = runCatching {
+                ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(bindAddr, preferredPort), 1024)
+                }
+            }.getOrNull()
+            if (preferred != null) return preferred
+        }
+        return ServerSocket(0, 1024, bindAddr)
+    }
+
+    private fun acceptLoop(listener: ServerSocket) {
         proxyExecutor.execute {
-            while (running.get() && !ss.isClosed) {
+            while (running.get() && !listener.isClosed) {
                 val clientSocket = try {
-                    ss.accept()
+                    listener.accept()
                 } catch (_: Exception) {
                     break
                 }
                 proxyExecutor.execute {
-                    handleSocksClient(clientSocket)
+                    handleIncomingClient(clientSocket)
                 }
             }
         }
-        return boundPort
     }
 
     fun stop() {
         running.set(false)
+        runCatching { httpServerSocket?.close() }
+        httpServerSocket = null
         runCatching { serverSocket?.close() }
         serverSocket = null
         while (true) {
@@ -243,31 +299,323 @@ class AmirLocalProxy(
         return direct?.let { ObtainedWs(it.conn, fromPool = false, usedCleanIp = it.usedCleanIp) }
     }
 
-    private fun handleSocksClient(localSocket: Socket) {
+    private fun handleIncomingClient(localSocket: Socket) {
         activeSockets.add(localSocket)
-        var wsConn: DirectWsConnection? = null
+        var delegated = false
         try {
             localSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
             localSocket.tcpNoDelay = true
             val localIn = BufferedInputStream(localSocket.getInputStream(), IO_BUFFER_SIZE)
             val localOut = localSocket.getOutputStream()
 
-            // 1. SOCKS5 Greeting (only No-Auth 0x00 supported)
+            localIn.mark(4)
+            val firstByte = localIn.read()
+            if (firstByte < 0) return
+            localIn.reset()
+
+            delegated = true
+            if (firstByte == 0x05) {
+                handleSocksClient(localSocket, localIn, localOut)
+            } else {
+                handleHttpProxyClient(localSocket, localIn, localOut)
+            }
+        } catch (e: Exception) {
+            emitThrottledError("Amir proxy accept error: ${e.message}")
+        } finally {
+            if (!delegated) {
+                activeSockets.remove(localSocket)
+                runCatching { localSocket.close() }
+            }
+        }
+    }
+
+    private fun handleHttpProxyClient(
+        localSocket: Socket,
+        localIn: BufferedInputStream,
+        localOut: OutputStream
+    ) {
+        var wsConn: DirectWsConnection? = null
+        try {
+            val requestLine = readHttpLine(localIn)?.trim().orEmpty()
+            if (requestLine.isEmpty()) return
+            val parts = requestLine.split(Regex("\\s+"))
+            if (parts.size < 2) {
+                writeSimpleHttpError(localOut, 400, "Bad Request")
+                return
+            }
+            val method = parts[0].uppercase()
+            val rawTarget = parts[1]
+            val httpVersion = parts.getOrNull(2)?.takeIf { it.startsWith("HTTP/", ignoreCase = true) } ?: "HTTP/1.1"
+
+            val rawHeaders = mutableListOf<Pair<String, String>>()
+            var hostHeader = ""
+            var proxyAuthHeader = ""
+            while (true) {
+                val line = readHttpLine(localIn) ?: return
+                if (line.isEmpty()) break
+                val colon = line.indexOf(':')
+                if (colon > 0) {
+                    val name = line.substring(0, colon).trim()
+                    val value = line.substring(colon + 1).trim()
+                    rawHeaders += name to value
+                    if (name.equals("Host", ignoreCase = true)) {
+                        hostHeader = value
+                    } else if (name.equals("Proxy-Authorization", ignoreCase = true)) {
+                        proxyAuthHeader = value
+                    }
+                }
+            }
+
+            if (!isHttpProxyAuthorized(proxyAuthHeader)) {
+                runCatching {
+                    localOut.write(
+                        (
+                            "HTTP/1.1 407 Proxy Authentication Required\r\n" +
+                                "Proxy-Authenticate: Basic realm=\"PalaNG AMIR\"\r\n" +
+                                "Content-Length: 0\r\n" +
+                                "Connection: close\r\n\r\n"
+                            ).toByteArray(StandardCharsets.US_ASCII)
+                    )
+                    localOut.flush()
+                }
+                return
+            }
+
+            if (method == "CONNECT") {
+                val (targetHost, targetPort) = parseHostPort(rawTarget, defaultPort = 443)
+                if (targetHost.isBlank() || targetPort !in 1..65535) {
+                    writeSimpleHttpError(localOut, 400, "Bad Request")
+                    return
+                }
+                val session = establishAmirTunnel(targetHost, targetPort)
+                if (session == null) {
+                    writeSimpleHttpError(localOut, 502, "Bad Gateway")
+                    return
+                }
+                wsConn = session.first
+                val activeKey = session.second
+
+                localSocket.soTimeout = 0
+                wsConn.socket.soTimeout = 0
+                localOut.write("HTTP/1.1 200 Connection Established\r\nProxy-Agent: PalaNG-AMIR\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+                localOut.flush()
+
+                val boundWs = wsConn
+                val upFuture = proxyExecutor.submit {
+                    relayUp(localSocket, localIn, boundWs, activeKey)
+                }
+                relayDown(boundWs, localOut, activeKey)
+                runCatching { upFuture.cancel(false) }
+                return
+            }
+
+            // Plain HTTP Proxy request (e.g. GET http://example.com/path HTTP/1.1)
+            val parsedTarget = parseHttpForwardTarget(rawTarget, hostHeader)
+            if (parsedTarget == null) {
+                writeSimpleHttpError(localOut, 400, "Bad Request")
+                return
+            }
+            val (targetHost, targetPort, originPath) = parsedTarget
+
+            val session = establishAmirTunnel(targetHost, targetPort)
+            if (session == null) {
+                writeSimpleHttpError(localOut, 502, "Bad Gateway")
+                return
+            }
+            wsConn = session.first
+            val activeKey = session.second
+
+            val reqBuilder = StringBuilder(512)
+            reqBuilder.append(method).append(' ').append(originPath).append(' ').append(httpVersion).append("\r\n")
+            var sawHost = false
+            for ((name, value) in rawHeaders) {
+                if (name.equals("Proxy-Connection", ignoreCase = true) ||
+                    name.equals("Proxy-Authorization", ignoreCase = true) ||
+                    name.equals("Connection", ignoreCase = true) ||
+                    name.equals("Keep-Alive", ignoreCase = true)
+                ) {
+                    continue
+                }
+                if (name.equals("Host", ignoreCase = true)) sawHost = true
+                reqBuilder.append(name).append(": ").append(value).append("\r\n")
+            }
+            if (!sawHost) {
+                val formattedHost = if (targetHost.contains(':')) "[$targetHost]" else targetHost
+                val hVal = if (targetPort == 80) formattedHost else "$formattedHost:$targetPort"
+                reqBuilder.append("Host: ").append(hVal).append("\r\n")
+            }
+            reqBuilder.append("Connection: close\r\n\r\n")
+            val initialBytes = reqBuilder.toString().toByteArray(StandardCharsets.ISO_8859_1)
+
+            localSocket.soTimeout = 0
+            wsConn.socket.soTimeout = 0
+
+            // Forward rewritten request headers over AMIR WS before entering full-duplex body/response relay
+            var offset = 0
+            while (offset < initialBytes.size) {
+                val chunkLen = minOf(MAX_CHUNK, initialBytes.size - offset)
+                val slice = initialBytes.copyOfRange(offset, offset + chunkLen)
+                val enc = xorBytes(slice, activeKey)
+                wsConn.sendBinaryFrame(enc, 0, enc.size)
+                uplinkBytesCounter.addAndGet(chunkLen.toLong())
+                offset += chunkLen
+            }
+            synchronized(wsConn.writeLock) {
+                wsConn.out.flush()
+            }
+
+            val boundWs = wsConn
+            val upFuture = proxyExecutor.submit {
+                relayUp(localSocket, localIn, boundWs, activeKey)
+            }
+            relayDown(boundWs, localOut, activeKey)
+            runCatching { upFuture.cancel(false) }
+        } catch (e: Exception) {
+            emitThrottledError("Amir HTTP proxy error: ${e.message}")
+        } finally {
+            closeLocalAndWs(localSocket, wsConn)
+        }
+    }
+
+    private fun establishAmirTunnel(targetHost: String, targetPort: Int): Pair<DirectWsConnection, ByteArray>? {
+        val dialHost = if (targetPort == 53 && isCloudflareResolverIp(targetHost)) {
+            "8.8.8.8"
+        } else {
+            targetHost
+        }
+        val obtained = obtainWebSocket() ?: return null
+        var wsConn: DirectWsConnection? = obtained.conn
+        val (initPacket, key) = buildInitPacket(uuidBytes, dialHost, targetPort)
+        var activeKey = key
+        var ackBytes: ByteArray? = null
+        var handshakeFailed = false
+        try {
+            wsConn!!.socket.soTimeout = if (obtained.fromPool) POOLED_ACK_TIMEOUT_MS else HANDSHAKE_TIMEOUT_MS
+            wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
+            wsConn.out.flush()
+            ackBytes = wsConn.readMessageBytes()
+            if (ackBytes == null || ackBytes.size < 16) {
+                handshakeFailed = true
+            }
+        } catch (_: Exception) {
+            handshakeFailed = true
+        }
+        if (handshakeFailed) {
+            activeSockets.remove(wsConn!!.socket)
+            runCatching { wsConn.socket.close() }
+            val retryDial = dialBestWebSocket(preferDirectHostFirst = obtained.usedCleanIp)
+            wsConn = retryDial?.conn
+            if (wsConn != null) {
+                val (retryInit, retryKey) = buildInitPacket(uuidBytes, dialHost, targetPort)
+                activeKey = retryKey
+                ackBytes = runCatching {
+                    wsConn.socket.soTimeout = HANDSHAKE_TIMEOUT_MS
+                    wsConn.sendBinaryFrame(retryInit, 0, retryInit.size)
+                    wsConn.out.flush()
+                    wsConn.readMessageBytes()
+                }.getOrNull()
+                if (obtained.usedCleanIp && ackBytes != null && ackBytes.size >= 16 && !retryDial.usedCleanIp) {
+                    recordCleanIpFailure("post-upgrade handshake dropped on $cleanIp")
+                }
+            } else {
+                ackBytes = null
+            }
+        }
+
+        if (wsConn == null || ackBytes == null || ackBytes.size < 16) {
+            emitThrottledError("Amir tunnel handshake failed for $dialHost:$targetPort")
+            wsConn?.let { conn ->
+                activeSockets.remove(conn.socket)
+                runCatching { conn.socket.close() }
+            }
+            return null
+        }
+
+        val decryptedAck = xorBytes(ackBytes, activeKey)
+        val expectedAck = hmacSha256(activeKey, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
+        if (decryptedAck.size < 16 || !MessageDigest.isEqual(decryptedAck.copyOfRange(0, 16), expectedAck)) {
+            emitThrottledError("Amir HMAC ACK mismatch for $dialHost:$targetPort")
+            activeSockets.remove(wsConn.socket)
+            runCatching { wsConn.socket.close() }
+            return null
+        }
+        return wsConn to activeKey
+    }
+
+    private fun isHttpProxyAuthorized(proxyAuthHeader: String): Boolean {
+        val reqUser = settings.localProxyUsername
+        val reqPass = settings.localProxyPassword
+        if (reqUser.isEmpty() && reqPass.isEmpty()) return true
+        if (!proxyAuthHeader.startsWith("Basic ", ignoreCase = true)) return false
+        val encoded = proxyAuthHeader.substring(6).trim()
+        val decoded = runCatching {
+            String(Base64.decode(encoded, Base64.DEFAULT), StandardCharsets.UTF_8)
+        }.getOrNull() ?: return false
+        return decoded == "$reqUser:$reqPass"
+    }
+
+    private fun closeLocalAndWs(localSocket: Socket, wsConn: DirectWsConnection?) {
+        activeSockets.remove(localSocket)
+        runCatching { localSocket.close() }
+        wsConn?.let { conn ->
+            activeSockets.remove(conn.socket)
+            runCatching {
+                if (!conn.socket.isClosed) {
+                    conn.socket.soTimeout = 1_000
+                    synchronized(conn.writeLock) {
+                        conn.sendCloseFrame()
+                        conn.out.flush()
+                    }
+                }
+            }
+            runCatching { conn.socket.close() }
+        }
+    }
+
+    private fun handleSocksClient(
+        localSocket: Socket,
+        localIn: BufferedInputStream,
+        localOut: OutputStream
+    ) {
+        var wsConn: DirectWsConnection? = null
+        try {
+            // 1. SOCKS5 Greeting (No-Auth 0x00, plus RFC 1929 0x02 when proxy credentials are configured)
             val header = readExactBytes(localIn, 2)
             if (header[0].toInt() != 5) return
             val nMethods = header[1].toInt() and 0xFF
             if (nMethods == 0) return
             val methods = readExactBytes(localIn, nMethods)
+            val authConfigured = settings.localProxyUsername.isNotEmpty() || settings.localProxyPassword.isNotEmpty()
             val supportsNoAuth = methods.any { (it.toInt() and 0xFF) == 0x00 }
-            if (!supportsNoAuth) {
+            val supportsUserPass = methods.any { (it.toInt() and 0xFF) == 0x02 }
+            if (authConfigured && supportsUserPass) {
+                localOut.write(byteArrayOf(0x05, 0x02))
+                localOut.flush()
+                val ver = readExactBytes(localIn, 1)[0].toInt() and 0xFF
+                if (ver != 1) return
+                val uLen = readExactBytes(localIn, 1)[0].toInt() and 0xFF
+                val user = String(readExactBytes(localIn, uLen), StandardCharsets.UTF_8)
+                val pLen = readExactBytes(localIn, 1)[0].toInt() and 0xFF
+                val pass = String(readExactBytes(localIn, pLen), StandardCharsets.UTF_8)
+                if (user != settings.localProxyUsername || pass != settings.localProxyPassword) {
+                    runCatching {
+                        localOut.write(byteArrayOf(0x01, 0x01))
+                        localOut.flush()
+                    }
+                    return
+                }
+                localOut.write(byteArrayOf(0x01, 0x00))
+                localOut.flush()
+            } else if (!authConfigured && supportsNoAuth) {
+                localOut.write(byteArrayOf(0x05, 0x00))
+                localOut.flush()
+            } else {
                 runCatching {
                     localOut.write(byteArrayOf(0x05, 0xFF.toByte()))
                     localOut.flush()
                 }
                 return
             }
-            localOut.write(byteArrayOf(0x05, 0x00))
-            localOut.flush()
 
             // 2. SOCKS5 Request: CONNECT (0x01) or UDP ASSOCIATE (0x03 for DNS port 53)
             val req = readExactBytes(localIn, 4)
@@ -354,76 +702,23 @@ class AmirLocalProxy(
                 return
             }
 
-            // 4. Obtain WebSocket from pre-warmed pool or dial directly
-            val obtained = obtainWebSocket()
-            if (obtained == null) {
+            // 4-6. Establish AMIR Worker WebSocket tunnel and verify HMAC ACK
+            val session = establishAmirTunnel(targetHost, targetPort)
+            if (session == null) {
                 runCatching {
                     localOut.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
                     localOut.flush()
                 }
                 return
             }
-            wsConn = obtained.conn
-
-            // 5. Send Amir init packet (fail fast on stale pooled WS and retry via alternate path if needed)
-            val (initPacket, key) = buildInitPacket(uuidBytes, dialHost, targetPort)
-            var ackBytes: ByteArray? = null
-            var activeKey = key
-            var handshakeFailed = false
-            try {
-                wsConn.socket.soTimeout = if (obtained.fromPool) POOLED_ACK_TIMEOUT_MS else HANDSHAKE_TIMEOUT_MS
-                wsConn.sendBinaryFrame(initPacket, 0, initPacket.size)
-                wsConn.out.flush()
-                ackBytes = wsConn.readMessageBytes()
-                if (ackBytes == null || ackBytes.size < 16) {
-                    handshakeFailed = true
-                }
-            } catch (_: Exception) {
-                handshakeFailed = true
-            }
-            if (handshakeFailed) {
-                activeSockets.remove(wsConn.socket)
-                runCatching { wsConn.socket.close() }
-                val retryDial = dialBestWebSocket(preferDirectHostFirst = obtained.usedCleanIp)
-                wsConn = retryDial?.conn
-                if (wsConn != null) {
-                    val (retryInit, retryKey) = buildInitPacket(uuidBytes, dialHost, targetPort)
-                    activeKey = retryKey
-                    ackBytes = runCatching {
-                        wsConn.socket.soTimeout = HANDSHAKE_TIMEOUT_MS
-                        wsConn.sendBinaryFrame(retryInit, 0, retryInit.size)
-                        wsConn.out.flush()
-                        wsConn.readMessageBytes()
-                    }.getOrNull()
-                    if (obtained.usedCleanIp && ackBytes != null && ackBytes.size >= 16 && !retryDial.usedCleanIp) {
-                        recordCleanIpFailure("post-upgrade handshake dropped on $cleanIp")
-                    }
-                } else {
-                    ackBytes = null
-                }
-            }
-
-            if (wsConn == null || ackBytes == null || ackBytes.size < 16) {
-                emitThrottledError("Amir tunnel handshake failed for $dialHost:$targetPort")
-                runCatching {
-                    localOut.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    localOut.flush()
-                }
-                return
-            }
-
-            val decryptedAck = xorBytes(ackBytes, activeKey)
-            val expectedAck = hmacSha256(activeKey, "OK".toByteArray(StandardCharsets.US_ASCII)).copyOfRange(0, 16)
-            if (decryptedAck.size < 16 || !MessageDigest.isEqual(decryptedAck.copyOfRange(0, 16), expectedAck)) {
-                emitThrottledError("Amir HMAC ACK mismatch for $dialHost:$targetPort")
-                return
-            }
+            wsConn = session.first
+            val activeKey = session.second
 
             // Switch both sockets to infinite idle timeout for active full-duplex streams
             localSocket.soTimeout = 0
             wsConn.socket.soTimeout = 0
 
-            // 6. Send SOCKS5 success response
+            // Send SOCKS5 success response
             localOut.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             localOut.flush()
 
@@ -438,21 +733,7 @@ class AmirLocalProxy(
         } catch (e: Exception) {
             emitThrottledError("Amir proxy connection error: ${e.message}")
         } finally {
-            activeSockets.remove(localSocket)
-            runCatching { localSocket.close() }
-            wsConn?.let { conn ->
-                activeSockets.remove(conn.socket)
-                runCatching {
-                    if (!conn.socket.isClosed) {
-                        conn.socket.soTimeout = 1_000
-                        synchronized(conn.writeLock) {
-                            conn.sendCloseFrame()
-                            conn.out.flush()
-                        }
-                    }
-                }
-                runCatching { conn.socket.close() }
-            }
+            closeLocalAndWs(localSocket, wsConn)
         }
     }
 
@@ -689,6 +970,7 @@ class AmirLocalProxy(
             while (running.get() && !wsConn.socket.isClosed && !localSocket.isClosed) {
                 val read = localIn.read(frameBuf, WS_MAX_HEADER_BYTES, MAX_CHUNK)
                 if (read <= 0) break
+                uplinkBytesCounter.addAndGet(read.toLong())
 
                 // Fast PRNG 4-byte RFC-6455 masking key
                 maskSeed = maskSeed xor (maskSeed shl 13)
@@ -854,6 +1136,7 @@ class AmirLocalProxy(
                     }
                     msgKeyOffset += toRead
                     frameOffset += toRead
+                    downlinkBytesCounter.addAndGet(toRead.toLong())
                     localOut.write(chunkBuf, 0, toRead)
                     remaining -= toRead
                 }
@@ -1030,9 +1313,9 @@ class AmirLocalProxy(
         if (isIpLiteral(cleanTarget)) {
             return listOf(InetAddress.getByName(cleanTarget))
         }
-        val mapped = parsedDnsHosts[cleanTarget]
-            ?: parsedDnsHosts["domain:$cleanTarget"]
-            ?: parsedDnsHosts["full:$cleanTarget"]
+        val mapped = customHostOverrides[cleanTarget]
+            ?: customHostOverrides["domain:$cleanTarget"]
+            ?: customHostOverrides["full:$cleanTarget"]
             ?: resolvedHosts[cleanTarget]
         if (!mapped.isNullOrEmpty()) {
             val mappedAddrs = mapped.mapNotNull { ip -> runCatching { InetAddress.getByName(ip) }.getOrNull() }
@@ -1349,17 +1632,105 @@ class AmirLocalProxy(
             return clean == "127.0.0.1" || clean.startsWith("127.") || clean == "localhost" || clean == "::1"
         }
 
+        private fun parseHostOverrides(raw: String): Map<String, List<String>> {
+            if (raw.isBlank()) return emptyMap()
+            val out = linkedMapOf<String, MutableList<String>>()
+            raw.split(',', '\n', ';')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .forEach { entry ->
+                    val colon = entry.lastIndexOf(':')
+                    if (colon <= 0 || colon >= entry.length - 1) return@forEach
+                    val host = entry.substring(0, colon).trim()
+                    val ip = entry.substring(colon + 1).trim().removePrefix("[").removeSuffix("]")
+                    if (host.isNotEmpty() && isIpLiteral(ip)) {
+                        out.getOrPut(host) { mutableListOf() }.add(ip)
+                    }
+                }
+            return out
+        }
+
         private fun isLoopbackTarget(
             workerHost: String,
-            parsedDnsHosts: Map<String, List<String>>,
+            customHostOverrides: Map<String, List<String>>,
             resolvedHosts: Map<String, List<String>>
         ): Boolean {
             if (isLoopbackHost(workerHost)) return true
-            val mapped = parsedDnsHosts[workerHost]
-                ?: parsedDnsHosts["domain:$workerHost"]
-                ?: parsedDnsHosts["full:$workerHost"]
+            val mapped = customHostOverrides[workerHost]
+                ?: customHostOverrides["domain:$workerHost"]
+                ?: customHostOverrides["full:$workerHost"]
                 ?: resolvedHosts[workerHost]
             return mapped?.any { isLoopbackHost(it) } == true
+        }
+
+        private fun writeSimpleHttpError(out: OutputStream, code: Int, reason: String) {
+            runCatching {
+                out.write(
+                    (
+                        "HTTP/1.1 $code $reason\r\n" +
+                            "Content-Length: 0\r\n" +
+                            "Connection: close\r\n\r\n"
+                        ).toByteArray(StandardCharsets.US_ASCII)
+                )
+                out.flush()
+            }
+        }
+
+        internal fun parseHostPort(authority: String, defaultPort: Int): Pair<String, Int> {
+            val trimmed = authority.trim().substringAfterLast('@')
+            if (trimmed.isEmpty()) return "" to -1
+            if (trimmed.startsWith("[")) {
+                val closeIdx = trimmed.indexOf(']')
+                if (closeIdx <= 1) return "" to -1
+                val host = trimmed.substring(1, closeIdx)
+                val rest = trimmed.substring(closeIdx + 1)
+                val port = if (rest.startsWith(":")) {
+                    rest.substring(1).toIntOrNull() ?: return "" to -1
+                } else {
+                    defaultPort
+                }
+                return host to port
+            }
+            val firstColon = trimmed.indexOf(':')
+            val lastColon = trimmed.lastIndexOf(':')
+            return if (lastColon > 0 && firstColon == lastColon) {
+                val host = trimmed.substring(0, lastColon)
+                val port = trimmed.substring(lastColon + 1).toIntOrNull() ?: return "" to -1
+                host to port
+            } else {
+                trimmed to defaultPort
+            }
+        }
+
+        internal fun parseHttpForwardTarget(rawTarget: String, hostHeader: String): Triple<String, Int, String>? {
+            val target = rawTarget.trim()
+            if (target.startsWith("http://", ignoreCase = true) || target.startsWith("https://", ignoreCase = true)) {
+                val isHttps = target.startsWith("https://", ignoreCase = true)
+                val afterScheme = target.substring(if (isHttps) 8 else 7)
+                val slashIdx = afterScheme.indexOf('/')
+                val qIdx = afterScheme.indexOf('?')
+                val sepIdx = when {
+                    slashIdx >= 0 && qIdx >= 0 -> minOf(slashIdx, qIdx)
+                    slashIdx >= 0 -> slashIdx
+                    qIdx >= 0 -> qIdx
+                    else -> -1
+                }
+                val authority = if (sepIdx >= 0) afterScheme.substring(0, sepIdx) else afterScheme
+                val originPath = if (sepIdx >= 0) {
+                    val tail = afterScheme.substring(sepIdx)
+                    if (tail.startsWith("/")) tail else "/$tail"
+                } else {
+                    "/"
+                }
+                val (host, port) = parseHostPort(authority, defaultPort = if (isHttps) 443 else 80)
+                if (host.isBlank() || port !in 1..65535) return null
+                return Triple(host, port, originPath)
+            }
+            if (hostHeader.isBlank()) return null
+            val (host, port) = parseHostPort(hostHeader, defaultPort = 80)
+            if (host.isBlank() || port !in 1..65535) return null
+            val originPath = target.ifEmpty { "/" }
+            return Triple(host, port, originPath)
         }
 
         private val CLOUDFLARE_RESOLVER_ADDRS: Set<InetAddress> by lazy {

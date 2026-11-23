@@ -153,7 +153,7 @@ fun AboutScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                     InfoBlock(
                         label = "Standalone AMIR Core",
-                        value = "Isolated WSS + XOR/HMAC-SHA256 engine with UDP/TCP DNS & pooled connections feeding SOCKS5 output into Xray-core",
+                        value = "Completely direct standalone WSS + XOR/HMAC-SHA256 HTTP/APN & SOCKS5 proxy — runs directly without Xray-core, TUN, or DNS modules",
                         accent = accent
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
