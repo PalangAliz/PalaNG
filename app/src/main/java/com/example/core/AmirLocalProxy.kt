@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
@@ -102,6 +103,33 @@ class AmirLocalProxy(
         val usedCleanIp: Boolean,
         val endpointIp: String = ""
     )
+
+    private class DialAttemptHandle {
+        private val cancelled = AtomicBoolean(false)
+        private val currentSocket = AtomicReference<Socket?>(null)
+
+        fun isCancelled(): Boolean = cancelled.get()
+
+        fun setSocket(socket: Socket) {
+            currentSocket.set(socket)
+            if (cancelled.get()) {
+                runCatching { socket.close() }
+            }
+        }
+
+        fun cancel() {
+            cancelled.set(true)
+            currentSocket.get()?.let { s ->
+                runCatching { s.close() }
+            }
+        }
+    }
+
+    @Volatile
+    internal var testTlsSocketFactory: SSLSocketFactory? = null
+
+    @Volatile
+    internal var testHostnameVerifier: HostnameVerifier? = null
 
     private data class TunnelSession(
         val conn: DirectWsConnection,
@@ -1599,25 +1627,26 @@ class AmirLocalProxy(
         }
 
         // Smart staggered Happy Eyeballs: give primary candidate a head start (wake immediately on error),
-        // launch backup races only if slow, and immediately abort losing sockets once winner succeeds.
+        // launch backup races only if slow, and immediately abort losing attempts once winner succeeds
+        // without touching the winner's underlying TCP/TLS socket.
         val winner = CompletableFuture<DialAttemptResult?>()
         val winnerClaimed = AtomicBoolean(false)
         val primaryFinished = CountDownLatch(1)
         val remainingCount = AtomicInteger(candidates.size)
-        val raceSockets = Collections.synchronizedList(mutableListOf<Socket>())
+        val attempts = Array(candidates.size) { DialAttemptHandle() }
 
-        fun closeLosingSockets(winnerSocket: Socket?) {
-            val snapshot = synchronized(raceSockets) { raceSockets.toList() }
-            for (s in snapshot) {
-                if (s !== winnerSocket) {
-                    activeSockets.remove(s)
-                    runCatching { s.close() }
+        fun closeLosingAttempts(winnerIndex: Int) {
+            for (idx in attempts.indices) {
+                if (idx != winnerIndex) {
+                    attempts[idx].cancel()
                 }
             }
         }
 
-        fun launchCandidate(candidate: EndpointCandidate, isPrimary: Boolean) {
+        fun launchCandidate(index: Int, candidate: EndpointCandidate, isPrimary: Boolean) {
+            val attempt = attempts[index]
             if (winnerClaimed.get() || !running.get()) {
+                attempt.cancel()
                 if (isPrimary) primaryFinished.countDown()
                 if (remainingCount.decrementAndGet() == 0) {
                     winner.complete(null)
@@ -1627,14 +1656,15 @@ class AmirLocalProxy(
             runCatching {
                 dialRaceExecutor.execute {
                     if (winnerClaimed.get() || !running.get()) {
+                        attempt.cancel()
                         if (isPrimary) primaryFinished.countDown()
                         if (remainingCount.decrementAndGet() == 0) winner.complete(null)
                         return@execute
                     }
                     val conn = runCatching {
-                        dialSingleAddressWebSocket(candidate.addr, candidate.connectTimeoutMs, raceSockets)
+                        dialSingleAddressWebSocket(candidate.addr, candidate.connectTimeoutMs, attempt)
                     }.getOrNull()
-                    if (conn != null && winnerClaimed.compareAndSet(false, true)) {
+                    if (conn != null && !attempt.isCancelled() && winnerClaimed.compareAndSet(false, true)) {
                         if (isPrimary) primaryFinished.countDown()
                         preferredEndpointIp.set(candidate.ipString)
                         throttledEndpoints.remove(candidate.ipString)
@@ -1643,12 +1673,12 @@ class AmirLocalProxy(
                         if (candidate.isCleanIp) {
                             cleanIpFailureCount.set(0)
                         }
-                        closeLosingSockets(conn.socket)
+                        closeLosingAttempts(index)
                         winner.complete(DialAttemptResult(conn, usedCleanIp = candidate.isCleanIp, endpointIp = candidate.ipString))
                     } else {
                         if (isPrimary) {
                             primaryFinished.countDown()
-                            if (candidate.isCleanIp && conn == null) {
+                            if (candidate.isCleanIp && conn == null && !winnerClaimed.get()) {
                                 recordCleanIpFailure("dial failed")
                             }
                         }
@@ -1662,6 +1692,7 @@ class AmirLocalProxy(
                     }
                 }
             }.onFailure {
+                attempt.cancel()
                 if (isPrimary) primaryFinished.countDown()
                 if (remainingCount.decrementAndGet() == 0) {
                     winner.complete(null)
@@ -1669,7 +1700,7 @@ class AmirLocalProxy(
             }
         }
 
-        launchCandidate(candidates[0], isPrimary = true)
+        launchCandidate(0, candidates[0], isPrimary = true)
         val hasPreferOrClean = !preferDirectHostFirst &&
             (candidates[0].ipString == preferredEndpointIp.get() || candidates[0].isCleanIp)
         val staggerMs = if (hasPreferOrClean) PRIMARY_ENDPOINT_STAGGER_MS else HAPPY_EYEBALLS_STAGGER_MS
@@ -1679,14 +1710,14 @@ class AmirLocalProxy(
 
         for (i in 1 until candidates.size) {
             if (winnerClaimed.get()) break
-            launchCandidate(candidates[i], isPrimary = false)
+            launchCandidate(i, candidates[i], isPrimary = false)
         }
 
         val finalWin = runCatching {
-            winner.get(TLS_WS_UPGRADE_TIMEOUT_MS.toLong() + 1_200L, TimeUnit.MILLISECONDS)
+            winner.get(DIRECT_CONNECT_TIMEOUT_MS.toLong() + TLS_WS_UPGRADE_TIMEOUT_MS.toLong() + 1_000L, TimeUnit.MILLISECONDS)
         }.getOrNull()
         if (finalWin == null) {
-            closeLosingSockets(null)
+            closeLosingAttempts(-1)
             val currentPref = preferredEndpointIp.get()
             if (currentPref != null && candidates.any { it.ipString == currentPref }) {
                 preferredEndpointIp.compareAndSet(currentPref, null)
@@ -1856,13 +1887,16 @@ class AmirLocalProxy(
     private fun dialSingleAddressWebSocket(
         targetAddr: InetAddress,
         connectTimeoutMs: Int,
-        raceSockets: MutableList<Socket>? = null
+        attempt: DialAttemptHandle? = null
     ): DirectWsConnection {
         val rawSocket = Socket()
         var socketToTrack: Socket = rawSocket
         activeSockets.add(rawSocket)
-        raceSockets?.add(rawSocket)
+        attempt?.setSocket(rawSocket)
         try {
+            if (attempt?.isCancelled() == true) {
+                throw IOException("Dial cancelled")
+            }
             rawSocket.tcpNoDelay = true
             rawSocket.keepAlive = true
             // Keep kernel TCP window autotuning unlocked (explicit SO_RCVBUF/SO_SNDBUF caps throughput on high-RTT links)
@@ -1871,10 +1905,14 @@ class AmirLocalProxy(
             rawSocket.soTimeout = TLS_WS_UPGRADE_TIMEOUT_MS
 
             val finalSocket: Socket = if (isTls) {
-                val sslSocket = tlsSocketFactory.createSocket(rawSocket, workerHost, workerPort, true) as SSLSocket
+                val activeTlsFactory = testTlsSocketFactory ?: tlsSocketFactory
+                val sslSocket = activeTlsFactory.createSocket(rawSocket, workerHost, workerPort, true) as SSLSocket
                 sslSocket.tcpNoDelay = true
                 sslSocket.soTimeout = TLS_WS_UPGRADE_TIMEOUT_MS
-                raceSockets?.add(sslSocket)
+                attempt?.setSocket(sslSocket)
+                if (attempt?.isCancelled() == true) {
+                    throw IOException("Dial cancelled")
+                }
                 val sslParams = sslSocket.sslParameters
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isIpLiteral(workerHost)) {
                     sslParams.serverNames = listOf(SNIHostName(workerHost))
@@ -1882,10 +1920,13 @@ class AmirLocalProxy(
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     sslParams.applicationProtocols = arrayOf("http/1.1")
                 }
-                sslParams.endpointIdentificationAlgorithm = "HTTPS"
+                if (testHostnameVerifier == null) {
+                    sslParams.endpointIdentificationAlgorithm = "HTTPS"
+                }
                 sslSocket.sslParameters = sslParams
                 sslSocket.startHandshake()
-                val verified = HttpsURLConnection.getDefaultHostnameVerifier().verify(workerHost, sslSocket.session)
+                val verifier = testHostnameVerifier ?: HttpsURLConnection.getDefaultHostnameVerifier()
+                val verified = verifier.verify(workerHost, sslSocket.session)
                 if (!verified) {
                     throw SSLPeerUnverifiedException("Hostname verification failed for $workerHost")
                 }

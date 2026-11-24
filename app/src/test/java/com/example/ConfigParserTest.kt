@@ -2843,6 +2843,212 @@ class ConfigParserTest {
         assertFalse("AMIR config without assets must omit geosite:", withoutAssetsJson.contains("geosite:"))
         assertTrue("AMIR config without assets must retain regexp:.*\\.ir$", withoutAssetsJson.contains("regexp:.*\\\\.ir$"))
     }
+
+    @Test
+    fun `AmirLocalProxy multi-candidate TLS dial race keeps winner rawSocket open and avoids 502 Bad Gateway`() {
+        val uuid = "63ae8279-fafa-4dd0-b2ef-9d6a4ec3ffdd"
+        val uuidBytes = uuid.toByteArray(Charsets.UTF_8)
+
+        val wsServer = java.net.ServerSocket(0, 8, java.net.InetAddress.getByName("127.0.0.1"))
+        val wsPort = wsServer.localPort
+        // Second listener on 127.0.0.2 accepts TCP and stalls (never responds HTTP 101) so race actually runs & cancels loser
+        val stalledServer = java.net.ServerSocket(wsPort, 8, java.net.InetAddress.getByName("127.0.0.2"))
+        val stalledAccepted = java.util.concurrent.CopyOnWriteArrayList<java.net.Socket>()
+        val workerError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+
+        val stallThread = Thread {
+            while (!stalledServer.isClosed) {
+                val s = try {
+                    stalledServer.accept()
+                } catch (_: Exception) {
+                    break
+                }
+                stalledAccepted.add(s)
+            }
+        }.apply { isDaemon = true; start() }
+
+        val wsThread = Thread {
+            try {
+                wsServer.accept().use { s ->
+                    val inp = java.io.BufferedInputStream(s.getInputStream())
+                    val out = s.getOutputStream()
+                    val headerSb = StringBuilder()
+                    var wsKey = ""
+                    while (true) {
+                        val b = inp.read()
+                        if (b < 0) break
+                        headerSb.append(b.toChar())
+                        if (headerSb.endsWith("\r\n\r\n")) break
+                    }
+                    headerSb.toString().lines().forEach { line ->
+                        if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                            wsKey = line.substringAfter(':').trim()
+                        }
+                    }
+                    val sha1 = java.security.MessageDigest.getInstance("SHA-1")
+                    val accept = android.util.Base64.encodeToString(
+                        sha1.digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII)),
+                        android.util.Base64.NO_WRAP
+                    )
+                    out.write(
+                        ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n")
+                            .toByteArray(Charsets.US_ASCII)
+                    )
+                    out.flush()
+
+                    fun readWsFrame(): ByteArray? {
+                        val b0 = inp.read()
+                        if (b0 < 0) return null
+                        val b1 = inp.read()
+                        if (b1 < 0) return null
+                        val masked = (b1 and 0x80) != 0
+                        var len = b1 and 0x7F
+                        if (len == 126) {
+                            len = (inp.read() shl 8) or inp.read()
+                        }
+                        val mask = if (masked) ByteArray(4).also { inp.read(it) } else null
+                        val payload = ByteArray(len)
+                        var off = 0
+                        while (off < len) {
+                            val r = inp.read(payload, off, len - off)
+                            if (r < 0) return null
+                            off += r
+                        }
+                        if (mask != null) {
+                            for (i in payload.indices) {
+                                payload[i] = (payload[i].toInt() xor mask[i and 3].toInt()).toByte()
+                            }
+                        }
+                        return payload
+                    }
+
+                    fun writeWsFrame(data: ByteArray) {
+                        out.write(0x82)
+                        if (data.size <= 125) {
+                            out.write(data.size)
+                        } else {
+                            out.write(126)
+                            out.write((data.size ushr 8) and 0xFF)
+                            out.write(data.size and 0xFF)
+                        }
+                        out.write(data)
+                        out.flush()
+                    }
+
+                    val initFrame = readWsFrame()!!
+                    val nonce = initFrame.copyOfRange(0, 16)
+                    val key = com.example.core.AmirLocalProxy.deriveKey(uuidBytes, nonce)
+                    val expectedAck = com.example.core.AmirLocalProxy.hmacSha256(key, "OK".toByteArray(Charsets.US_ASCII))
+                        .copyOfRange(0, 16)
+                    writeWsFrame(com.example.core.AmirLocalProxy.xorBytes(expectedAck, key))
+
+                    val reqFrame = readWsFrame()!!
+                    val plainReq = String(com.example.core.AmirLocalProxy.xorBytes(reqFrame, key), Charsets.US_ASCII)
+                    assertEquals("TLS_RACE_PING", plainReq)
+                    writeWsFrame(com.example.core.AmirLocalProxy.xorBytes("TLS_RACE_PONG".toByteArray(Charsets.US_ASCII), key))
+                }
+            } catch (t: Throwable) {
+                workerError.set(t)
+            }
+        }.apply { isDaemon = true; start() }
+
+        val cfg = com.example.data.model.ServerConfig(
+            remarks = "AmirTlsRace",
+            protocol = ProtocolType.AMIR,
+            address = "worker.test.invalid",
+            port = wsPort,
+            passwordOrId = uuid,
+            extraParam1 = "wss://worker.test.invalid:$wsPort/",
+            extraParam2 = "127.0.0.2"
+        )
+        val proxy = com.example.core.AmirLocalProxy(
+            serverConfig = cfg,
+            settings = AppSettings(vpnMode = false),
+            resolvedHosts = mapOf("worker.test.invalid" to listOf("127.0.0.1"))
+        )
+
+        // Wrap rawSocket in an SSLSocket delegate so rawSocket !== sslSocket (autoClose = true),
+        // exercising the exact closeLosingAttempts vs winner rawSocket contract.
+        proxy.testHostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+        proxy.testTlsSocketFactory = object : javax.net.ssl.SSLSocketFactory() {
+            override fun getDefaultCipherSuites(): Array<String> = emptyArray()
+            override fun getSupportedCipherSuites(): Array<String> = emptyArray()
+            override fun createSocket(s: java.net.Socket, host: String, port: Int, autoClose: Boolean): java.net.Socket {
+                return object : javax.net.ssl.SSLSocket() {
+                    private var sslParamsObj = javax.net.ssl.SSLParameters()
+                    override fun getInputStream() = s.getInputStream()
+                    override fun getOutputStream() = s.getOutputStream()
+                    override fun setSoTimeout(timeout: Int) { s.soTimeout = timeout }
+                    override fun getSoTimeout(): Int = s.soTimeout
+                    override fun setTcpNoDelay(on: Boolean) { s.tcpNoDelay = on }
+                    override fun getTcpNoDelay(): Boolean = s.tcpNoDelay
+                    override fun isClosed(): Boolean = s.isClosed
+                    override fun isConnected(): Boolean = s.isConnected
+                    override fun close() { if (autoClose) s.close() }
+                    override fun getSSLParameters() = sslParamsObj
+                    override fun setSSLParameters(params: javax.net.ssl.SSLParameters) { sslParamsObj = params }
+                    override fun getSupportedCipherSuites() = emptyArray<String>()
+                    override fun getEnabledCipherSuites() = emptyArray<String>()
+                    override fun setEnabledCipherSuites(suites: Array<out String>?) = Unit
+                    override fun getSupportedProtocols() = emptyArray<String>()
+                    override fun getEnabledProtocols() = emptyArray<String>()
+                    override fun setEnabledProtocols(protocols: Array<out String>?) = Unit
+                    override fun getSession() = null
+                    override fun addHandshakeCompletedListener(listener: javax.net.ssl.HandshakeCompletedListener?) = Unit
+                    override fun removeHandshakeCompletedListener(listener: javax.net.ssl.HandshakeCompletedListener?) = Unit
+                    override fun startHandshake() = Unit
+                    override fun setUseClientMode(mode: Boolean) = Unit
+                    override fun getUseClientMode() = true
+                    override fun setNeedClientAuth(need: Boolean) = Unit
+                    override fun getNeedClientAuth() = false
+                    override fun setWantClientAuth(want: Boolean) = Unit
+                    override fun getWantClientAuth() = false
+                    override fun setEnableSessionCreation(flag: Boolean) = Unit
+                    override fun getEnableSessionCreation() = true
+                }
+            }
+            override fun createSocket(host: String?, port: Int) = throw UnsupportedOperationException()
+            override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int) = throw UnsupportedOperationException()
+            override fun createSocket(host: java.net.InetAddress?, port: Int) = throw UnsupportedOperationException()
+            override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int) = throw UnsupportedOperationException()
+        }
+
+        val (httpPort, _) = proxy.startDual(httpPreferredPort = 0, socksPreferredPort = 0, listenHost = "127.0.0.1")
+        try {
+            java.net.Socket("127.0.0.1", httpPort).use { client ->
+                client.soTimeout = 5_000
+                val cOut = client.getOutputStream()
+                val cIn = java.io.BufferedInputStream(client.getInputStream())
+                cOut.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                cOut.flush()
+
+                val respHeaders = StringBuilder()
+                while (true) {
+                    val b = cIn.read()
+                    if (b < 0) break
+                    respHeaders.append(b.toChar())
+                    if (respHeaders.endsWith("\r\n\r\n")) break
+                }
+                val statusLine = respHeaders.toString().lineSequence().firstOrNull().orEmpty()
+                assertTrue("Expected HTTP/1.1 200 Connection Established (not 502), got: $statusLine", statusLine.contains("200"))
+
+                cOut.write("TLS_RACE_PING".toByteArray(Charsets.US_ASCII))
+                cOut.flush()
+                val buf = ByteArray(64)
+                val n = cIn.read(buf)
+                assertTrue("Expected TLS_RACE_PONG reply", n > 0)
+                assertEquals("TLS_RACE_PONG", String(buf, 0, n, Charsets.US_ASCII))
+            }
+            wsThread.join(3_000)
+            org.junit.Assert.assertNull("Worker thread error: ${workerError.get()}", workerError.get())
+        } finally {
+            proxy.stop()
+            stalledAccepted.forEach { runCatching { it.close() } }
+            runCatching { stalledServer.close() }
+            runCatching { wsServer.close() }
+            stallThread.join(1_000)
+        }
+    }
 }
 
 
